@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+# Pre-push hook: any pushed version tag must match package.json's version.
+# Catches a mismatched release tag locally instead of failing the release
+# workflow (or worse, publishing the wrong version).
+
+PKG_VERSION="$(node -p "require('./package.json').version" 2>/dev/null)" || {
+  echo "error: pre-push cannot read package.json version" >&2
+  exit 1
+}
+
+while read local_ref local_sha remote_ref remote_sha; do
+  case "$local_ref" in
+    refs/tags/*)
+      TAG="${local_ref#refs/tags/}"
+      if [ "$TAG" != "v${PKG_VERSION}" ]; then
+        echo "error: pushing tag ${TAG} but package.json version is ${PKG_VERSION}" >&2
+        echo "  bump package.json first, then tag v<new-version> (e.g. npm version patch && git tag v0.2.1)" >&2
+        exit 1
+      fi
+      ;;
+  esac
+done
+
+exit 0

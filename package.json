@@ -30,7 +30,8 @@
   "sideEffects": false,
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "prepare": "husky"
+    "prepare": "husky",
+    "release": "commit-and-tag-version"
   },
   "keywords": [
     "deepseek-harness",
@@ -58,6 +59,7 @@
     "@commitlint/config-conventional": "^19.0.0",
     "@types/node": "^22.0.0",
     "@types/ssh2": "^1.15.5",
+    "commit-and-tag-version": "^13.1.2",
     "husky": "^9.0.0",
     "tsx": "^4.23.12",
     "typescript": "^6.0.0"

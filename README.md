@@ -165,15 +165,16 @@ npm i
 npm run typecheck
 ```
 
-- **Git hooks** (husky): `pre-commit` typechecks; `commit-msg` enforces [Conventional Commits](https://www.conventionalcommits.org/).
+- **Git hooks** (husky): `pre-commit` typechecks; `commit-msg` enforces [Conventional Commits](https://www.conventionalcommits.org/); `pre-push` rejects a version tag that does not match `package.json`.
 - **CI** (GitHub Actions): typecheck + publishable-payload check on every push/PR.
 - **Release** (GitHub Actions): push a version tag to publish to npm and draft a GitHub Release:
 
 ```sh
-git tag v0.1.1 && git push origin v0.1.1
+npm version patch -m "chore(release): v%s"   # bumps package.json + commits + tags
+git push origin main && git push origin --tags
 ```
 
-The tag must match the `version` field in `package.json`. Publishing uses the `NPM_TOKEN` repository secret (an npm **Automation token** — it bypasses 2FA for CI).
+The tag must match the `version` field in `package.json` (both hooks and the release workflow enforce it). Publishing uses the `NPM_TOKEN` repository secret (an npm **Automation token** — it bypasses 2FA for CI).
 
 ## License
 

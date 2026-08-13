@@ -165,15 +165,16 @@ npm i
 npm run typecheck
 ```
 
-- **Git hooks**（husky）：`pre-commit` 跑 typecheck；`commit-msg` 强制 [Conventional Commits](https://www.conventionalcommits.org/)。
+- **Git hooks**（husky）：`pre-commit` 跑 typecheck；`commit-msg` 强制 [Conventional Commits](https://www.conventionalcommits.org/)；`pre-push` 拒绝与 `package.json` 版本不一致的版本 tag。
 - **CI**（GitHub Actions）：每次 push/PR 跑 typecheck + 发布载荷检查。
 - **发布**（GitHub Actions）：推送版本 tag 自动发布 npm 并生成 GitHub Release：
 
 ```sh
-git tag v0.1.1 && git push origin v0.1.1
+npm version patch -m "chore(release): v%s"   # 改版本 + 提交 + 打 tag 一步完成
+git push origin main && git push origin --tags
 ```
 
-tag 必须与 `package.json` 的 `version` 字段一致。发布使用仓库的 `NPM_TOKEN` secret（npm **Automation token**，CI 发布可绕过 2FA）。
+tag 必须与 `package.json` 的 `version` 字段一致（本地 hook 与 release workflow 双重强制）。发布使用仓库的 `NPM_TOKEN` secret（npm **Automation token**，CI 发布可绕过 2FA）。
 
 ## License
 
