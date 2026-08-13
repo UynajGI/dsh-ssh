@@ -36,7 +36,15 @@ jobs:
             exit 1
           fi
 
+      - name: Skip publish when the version already exists
+        run: |
+          if npm view "dsh-ssh@${GITHUB_REF_NAME#v}" version >/dev/null 2>&1; then
+            echo "version ${GITHUB_REF_NAME#v} is already published; skipping npm publish"
+            echo "SKIP_PUBLISH=true" >> "$GITHUB_ENV"
+          fi
+
       - name: Publish to npm
+        if: env.SKIP_PUBLISH != 'true'
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
