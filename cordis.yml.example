@@ -1,0 +1,19 @@
+# dsh-ssh 配置示例：单跳板 + 目标机，装完 dsh-ssh 后改成你自己的值
+- id: ssh
+  name: dsh-ssh/ssh
+  config:
+    host: 10.0.0.5
+    port: 22
+    username: root
+    privateKey: ~/.ssh/id_ed25519
+    cwd: /root/workspace
+    jump:
+      - host: 47.xx.xx.1
+        username: ubuntu
+        privateKey: ~/.ssh/id_ed25519
+
+- id: subprocess-ssh
+  name: dsh-ssh/subprocess
+
+- id: fs-ssh
+  name: dsh-ssh/fs

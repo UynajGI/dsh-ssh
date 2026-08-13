@@ -1,0 +1,150 @@
+/**
+ * SSH Service Provider for the subprocess capability seam. Each handle starts
+ * through the shared SSH connection and keeps its output spill files on the
+ * local host (remote bytes already arrive over the channel).
+ * @module @deepseek-ai/dsh-subprocess-ssh
+ */
+
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, posix } from 'node:path'
+import { Context } from '@deepseek-ai/cordis'
+import { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
+import type {
+  SubprocessHandle,
+  SubprocessSpawnSpec,
+  SubprocessTerminalHandle,
+  SubprocessTerminalSpawnSpec,
+} from '@deepseek-ai/dsh-subprocess'
+import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
+import { quoteShellArg } from './runtime.ts'
+import { SshSubprocessHandle } from './process.ts'
+import { spawnSshTerminal } from './terminal.ts'
+import type { SshTerminalHandle } from './terminal.ts'
+
+/**
+ * Enforce the seam's documented grace bound (positive, finite, one Node timer),
+ * matching subprocess-local's spawn-time check.
+ * @param graceMs - the spec's cleanup grace in milliseconds.
+ */
+function requireRepresentableGrace(graceMs: number): void {
+  if (!Number.isFinite(graceMs) || graceMs <= 0 || graceMs > MAX_TIMER_DELAY_MS) {
+    throw new Error(`subprocess graceMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`)
+  }
+}
+
+/** SSH command manager registered as `ctx.subprocess`. */
+export class SshSubprocessRuntime extends SubprocessRuntime {
+  static inject = ['ssh']
+
+  private readonly live = new Set<SshSubprocessHandle>()
+  private readonly terminals = new Set<SshTerminalHandle>()
+  private readonly spillDir = mkdtempSync(join(tmpdir(), 'dsh-subprocess-ssh-'))
+  private disposing = false
+
+  /** Create the SSH subprocess service and bind its disposal policy. */
+  constructor(ctx: Context) {
+    super(ctx)
+    ctx.effect(() => async () => {
+      this.disposing = true
+      const handles = [...this.live]
+      const terminals = [...this.terminals]
+      const pending: Promise<unknown>[] = []
+      for (const handle of handles) {
+        handle.terminate()
+        pending.push(handle.waitForExit().then(() => { this.live.delete(handle) }))
+      }
+      for (const terminal of terminals) {
+        pending.push(terminal.terminate().then(() => { this.terminals.delete(terminal) }))
+      }
+      const outcomes = await Promise.allSettled(pending)
+      const failures = outcomes.flatMap<unknown>(outcome => outcome.status === 'rejected' ? [outcome.reason as unknown] : [])
+      if (failures.length === 1) throw failures[0]
+      if (failures.length > 1) throw new AggregateError(failures, 'subprocess-ssh: teardown failed')
+    }, 'ssh subprocess teardown')
+  }
+
+  /** @inheritdoc */
+  async resolveExecutable(
+    command: string,
+    env?: Readonly<Record<string, string>>,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    if (command.length === 0) throw new Error('subprocess-ssh: executable name must be non-empty')
+    signal?.throwIfAborted()
+    if (posix.isAbsolute(command)) {
+      const result = await this.ctx.ssh.exec(
+        `test -f ${quoteShellArg(command)} -a -x ${quoteShellArg(command)}`,
+        signal !== undefined ? { signal } : undefined,
+      )
+      signal?.throwIfAborted()
+      if (result.exitCode !== 0) {
+        throw new Error(`subprocess-ssh: command ${JSON.stringify(command)} is not an executable file`)
+      }
+      return command
+    }
+    if (command.includes('/')) {
+      throw new Error(
+        `subprocess-ssh: command ${JSON.stringify(command)} is a relative path; use an absolute path or a bare PATH name`,
+      )
+    }
+    const path = env?.PATH
+    const prefix = path === undefined ? '' : `PATH=${quoteShellArg(path)} `
+    const result = await this.ctx.ssh.exec(`${prefix}command -v -- ${quoteShellArg(command)}`, signal !== undefined ? { signal } : undefined)
+    signal?.throwIfAborted()
+    const executable = result.stdout.trim()
+    if (result.exitCode !== 0
+      || executable.length === 0
+      || executable.includes('\n')
+      || (!posix.isAbsolute(executable) && !executable.includes('/'))) {
+      throw new Error(`subprocess-ssh: executable ${JSON.stringify(command)} did not resolve to one absolute path`)
+    }
+    return posix.isAbsolute(executable) ? executable : posix.resolve(this.ctx.ssh.cwd, executable)
+  }
+
+  /** @inheritdoc */
+  spawn(spec: SubprocessSpawnSpec): SubprocessHandle {
+    if (this.disposing) throw new Error('subprocess-ssh: service is disposing')
+    const program = spec.argv[0]
+    if (program === undefined || program.length === 0) {
+      throw new Error('invalid argv: expected a non-empty program name at argv[0]')
+    }
+    requireRepresentableGrace(spec.graceMs)
+    if (spec.signal?.aborted === true) {
+      throw new Error(`aborted before spawn: ${String(spec.signal.reason)}`)
+    }
+    const handle = new SshSubprocessHandle(this.ctx.ssh, spec, this.spillDir)
+    this.live.add(handle)
+    const release = async (): Promise<void> => {
+      await handle.waitForExit()
+      this.live.delete(handle)
+    }
+    void handle.done.then(release, release).catch(() => {})
+    return handle
+  }
+
+  /** @inheritdoc */
+  async spawnTerminal(spec: SubprocessTerminalSpawnSpec): Promise<SubprocessTerminalHandle> {
+    if (this.disposing) throw new Error('subprocess-ssh: service is disposing')
+    const program = spec.argv[0]
+    if (program === undefined || program.length === 0) {
+      throw new Error('subprocess-ssh: terminal argv must contain a program')
+    }
+    requireRepresentableGrace(spec.graceMs)
+    spec.signal?.throwIfAborted()
+    const terminal = await spawnSshTerminal(this.ctx.ssh, spec)
+    if (this.disposing) {
+      await terminal.terminate()
+      throw new Error('subprocess-ssh: service disposed during terminal setup')
+    }
+    this.terminals.add(terminal)
+    const release = async (): Promise<void> => {
+      await terminal.terminate()
+      this.terminals.delete(terminal)
+    }
+    void terminal.done.then(release, release).catch(() => {})
+    return terminal
+  }
+}
+
+export default SshSubprocessRuntime
