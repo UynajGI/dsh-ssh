@@ -38,11 +38,11 @@ npm i dsh-ssh
 
 ## 快速开始（cordis.yml）
 
-三个插件，共用一个 SSH 连接：
+**一行挂载全部**——共享连接 + 两个远程 provider：
 
 ```yaml
-- id: ssh
-  name: dsh-ssh/ssh
+- id: ssh-remote
+  name: dsh-ssh
   config:
     host: 10.0.0.5            # 目标主机（必填）
     port: 22
@@ -65,10 +65,15 @@ npm i dsh-ssh
     strictHostKeyChecking: false   # true 时校验主机指纹
     knownHosts:                    # strictHostKeyChecking: true 时必填
       - 'SHA256:xxxxxxxx...'
+```
 
+聚合行等价于三个子路径行——只有需要单独组合 provider 时才分开挂载：
+
+```yaml
+- id: ssh
+  name: dsh-ssh/ssh            # ctx.ssh 连接（上面的 config）
 - id: subprocess-ssh
   name: dsh-ssh/subprocess     # ctx.subprocess 远程 provider
-
 - id: fs-ssh
   name: dsh-ssh/fs             # ctx.fs 远程 provider（SFTP）
 ```

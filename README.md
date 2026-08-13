@@ -38,11 +38,11 @@ npm i dsh-ssh
 
 ## Quick start (cordis.yml)
 
-Three plugins, one shared SSH connection:
+**One row mounts everything** — the shared connection owner plus both remote providers:
 
 ```yaml
-- id: ssh
-  name: dsh-ssh/ssh
+- id: ssh-remote
+  name: dsh-ssh
   config:
     host: 10.0.0.5            # target host (required)
     port: 22
@@ -65,10 +65,15 @@ Three plugins, one shared SSH connection:
     strictHostKeyChecking: false   # verify the host key when true
     knownHosts:                    # required when strictHostKeyChecking: true
       - 'SHA256:xxxxxxxx...'
+```
 
+The aggregate row is equivalent to three subpath rows — mount them separately only when a deployment composes providers individually:
+
+```yaml
+- id: ssh
+  name: dsh-ssh/ssh            # ctx.ssh connection owner (config above)
 - id: subprocess-ssh
   name: dsh-ssh/subprocess     # ctx.subprocess remote provider
-
 - id: fs-ssh
   name: dsh-ssh/fs             # ctx.fs remote provider (SFTP)
 ```
