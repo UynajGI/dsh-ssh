@@ -284,6 +284,9 @@ export class SshRuntime extends Service {
   private readonly hosts: ResolvedHost[]
   private clients: Client[] = []
   private ready: Promise<Client> | undefined
+  private sftp: SFTPWrapper | undefined
+  private sftpOpening: Promise<SFTPWrapper> | undefined
+  private remoteEnvironment: Promise<Record<string, string>> | undefined
   private disposed = false
 
   /** Validate config, resolve the jump chain, and bind the disposal policy. */
@@ -297,6 +300,15 @@ export class SshRuntime extends Service {
 
     ctx.effect(() => async () => {
       this.disposed = true
+      if (this.sftp !== undefined) {
+        const sftp = this.sftp
+        this.sftp = undefined
+        try {
+          sftp.end()
+        } catch (_alreadyEnded) {
+          // A closed SFTP channel is already quiescent.
+        }
+      }
       const clients = this.clients
       this.clients = []
       // End the target first so its channel closes before the jump sockets it rode.
@@ -323,15 +335,60 @@ export class SshRuntime extends Service {
     return client
   }
 
-  /** Open one SFTP channel on the shared connection for a bounded filesystem operation. */
+  /**
+   * Return the shared SFTP channel, opened lazily once per connection. A
+   * closed connection invalidates it so the next call reopens.
+   * @returns the live SFTP wrapper.
+   */
   async getSftp(): Promise<SFTPWrapper> {
+    if (this.disposed) throw new Error('SSH service is disposing')
+    if (this.sftp !== undefined) return this.sftp
+    this.sftpOpening ??= this.openSftp()
+    const sftp = await this.sftpOpening
+    if (this.sftp === undefined) this.sftp = sftp
+    return sftp
+  }
+
+  private async openSftp(): Promise<SFTPWrapper> {
     const client = await this.getClient()
-    return new Promise<SFTPWrapper>((resolve, reject) => {
-      client.sftp((error, sftp) => {
+    const sftp = await new Promise<SFTPWrapper>((resolve, reject) => {
+      client.sftp((error, value) => {
         if (error !== undefined) reject(error)
-        else resolve(sftp)
+        else resolve(value)
       })
     })
+    const invalidate = (): void => {
+      this.sftp = undefined
+      this.sftpOpening = undefined
+    }
+    sftp.on('close', invalidate)
+    sftp.on('end', invalidate)
+    return sftp
+  }
+
+  /**
+   * Return the remote login environment, read once per connection and cached.
+   * The login environment is stable for the connection lifetime, so adapters
+   * avoid one control command per spawned process.
+   * @returns the remote environment as name/value entries.
+   */
+  getRemoteEnvironment(): Promise<Record<string, string>> {
+    if (this.disposed) return Promise.reject(new Error('SSH service is disposing'))
+    this.remoteEnvironment ??= this.readRemoteEnvironment()
+    return this.remoteEnvironment
+  }
+
+  private async readRemoteEnvironment(): Promise<Record<string, string>> {
+    const { exitCode, stdout } = await this.exec('env -0')
+    if (exitCode !== 0) throw new Error('dsh-ssh: cannot read the remote environment')
+    const environment: Record<string, string> = {}
+    for (const entry of stdout.split('\0')) {
+      if (entry.length === 0) continue
+      const separator = entry.indexOf('=')
+      if (separator <= 0) continue
+      environment[entry.slice(0, separator)] = entry.slice(separator + 1)
+    }
+    return environment
   }
 
   /**
@@ -346,15 +403,23 @@ export class SshRuntime extends Service {
     const client = await this.getClient()
     const text = opts?.cwd !== undefined ? wrapCwd(opts.cwd, command) : command
     const outcome = await new Promise<ExecOutcome>((resolve, reject) => {
-      let stdout = ''
-      let stderr = ''
+      // Buffer whole chunks and decode once: SSH data events may split a
+      // multi-byte UTF-8 character across two callbacks, so per-chunk
+      // decoding would corrupt it.
+      const stdoutChunks: Buffer[] = []
+      const stderrChunks: Buffer[] = []
       let settled = false
       let channel: ClientChannel | undefined
       const finish = (exitCode: number | null, signal: string | null): void => {
         if (settled) return
         settled = true
         cleanup()
-        resolve({ exitCode, signal, stdout, stderr })
+        resolve({
+          exitCode,
+          signal,
+          stdout: Buffer.concat(stdoutChunks).toString('utf8'),
+          stderr: Buffer.concat(stderrChunks).toString('utf8'),
+        })
       }
       const onAbort = (): void => {
         // Closing the channel ends the remote command; its close event reports the outcome.
@@ -364,8 +429,8 @@ export class SshRuntime extends Service {
       client.exec(text, { pty: false }, (error, stream) => {
         if (error !== undefined) { cleanup(); reject(error); return }
         channel = stream
-        stream.on('data', (data: Buffer) => { stdout += data.toString('utf8') })
-        stream.stderr.on('data', (data: Buffer) => { stderr += data.toString('utf8') })
+        stream.on('data', (data: Buffer) => { stdoutChunks.push(data) })
+        stream.stderr.on('data', (data: Buffer) => { stderrChunks.push(data) })
         stream.on('close', (code: number | null, signal: string | null) => { finish(code, signal) })
       })
       if (opts?.signal?.aborted === true) { onAbort(); return }

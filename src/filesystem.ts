@@ -184,8 +184,6 @@ export class SshFileSystem extends FileSystem {
     } catch (error: unknown) {
       if (isNotFound(error)) return undefined
       throw mapError(error, 'lstat', displayPath, signal)
-    } finally {
-      sftp.end()
     }
   }
 
@@ -238,8 +236,6 @@ export class SshFileSystem extends FileSystem {
           }
         } catch (error: unknown) {
           throw mapError(error, 'read', displayPath, signal)
-        } finally {
-          sftp.end()
         }
       },
     }
@@ -270,8 +266,6 @@ export class SshFileSystem extends FileSystem {
       return entries.sort((left, right) => left.name.localeCompare(right.name))
     } catch (error: unknown) {
       throw mapError(error, 'list', target.displayPath, signal)
-    } finally {
-      sftp.end()
     }
   }
 
@@ -358,8 +352,6 @@ export class SshFileSystem extends FileSystem {
     } catch (error: unknown) {
       if (isNotFound(error)) return undefined
       throw mapError(error, 'stat', displayPath, signal)
-    } finally {
-      sftp.end()
     }
   }
 
@@ -383,8 +375,6 @@ export class SshFileSystem extends FileSystem {
       return data
     } catch (error: unknown) {
       throw mapError(error, 'read', target.displayPath, signal)
-    } finally {
-      sftp.end()
     }
   }
 
@@ -426,17 +416,13 @@ export class SshFileSystem extends FileSystem {
     let stagingCreated = false
     try {
       const sftp = await this.ctx.ssh.getSftp()
-      try {
-        await new Promise<void>((resolve, reject) => {
-          sftp.mkdir(stagingDirectory, error => { if (error !== undefined) reject(error); else resolve() })
-        })
-        stagingCreated = true
-        await new Promise<void>((resolve, reject) => {
-          sftp.writeFile(temporary, content, error => { if (error !== undefined) reject(error); else resolve() })
-        })
-      } finally {
-        sftp.end()
-      }
+      await new Promise<void>((resolve, reject) => {
+        sftp.mkdir(stagingDirectory, error => { if (error !== undefined) reject(error); else resolve() })
+      })
+      stagingCreated = true
+      await new Promise<void>((resolve, reject) => {
+        sftp.writeFile(temporary, content, error => { if (error !== undefined) reject(error); else resolve() })
+      })
       assertNotAborted(signal, 'write')
       const mode = existing === undefined ? 0o600 : existing.mode & 0o777
       await this.ctx.ssh.exec(`chmod ${mode.toString(8)} -- ${quoteShellArg(temporary)}`, signal !== undefined ? { signal } : undefined)
@@ -451,14 +437,9 @@ export class SshFileSystem extends FileSystem {
         }
         if (publication.stdout !== 'created') throw new Error('guarded create returned an invalid publication result')
       } else {
-        const sftp = await this.ctx.ssh.getSftp()
-        try {
-          await new Promise<void>((resolve, reject) => {
-            sftp.rename(temporary, targetPath, error => { if (error !== undefined) reject(error); else resolve() })
-          })
-        } finally {
-          sftp.end()
-        }
+        await new Promise<void>((resolve, reject) => {
+          sftp.rename(temporary, targetPath, error => { if (error !== undefined) reject(error); else resolve() })
+        })
       }
       assertNotAborted(signal, 'write')
       await this.removeStaging(stagingDirectory)
@@ -479,8 +460,6 @@ export class SshFileSystem extends FileSystem {
       })
     } catch {
       // The target is already committed; an empty private directory cannot turn that write into a failure.
-    } finally {
-      sftp.end()
     }
   }
 }

@@ -5,21 +5,12 @@ import { quoteShellArg } from './runtime.ts'
 import type SshRuntime from './runtime.ts'
 
 /**
- * Read the remote login environment through a NUL-delimited `env -0`.
+ * Read the remote login environment, cached on the shared connection owner.
  * @param ssh - shared SSH connection owner.
  * @returns the remote environment as name/value entries.
  */
 export async function readRemoteEnvironment(ssh: SshRuntime): Promise<Record<string, string>> {
-  const { exitCode, stdout } = await ssh.exec('env -0')
-  if (exitCode !== 0) throw new Error('subprocess-ssh: cannot read the remote environment')
-  const environment: Record<string, string> = {}
-  for (const entry of stdout.split('\0')) {
-    if (entry.length === 0) continue
-    const separator = entry.indexOf('=')
-    if (separator <= 0) continue
-    environment[entry.slice(0, separator)] = entry.slice(separator + 1)
-  }
-  return environment
+  return ssh.getRemoteEnvironment()
 }
 
 /**

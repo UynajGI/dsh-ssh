@@ -21,8 +21,8 @@ function isCollect(mode: SubprocessOutputMode): mode is SubprocessCollect {
 }
 
 /** Normalize an SSH signal name into the `SIG…` vocabulary the seam carries. */
-function normalizeSignal(signal: string | null): NodeJS.Signals | null {
-  if (signal === null) return null
+function normalizeSignal(signal: string | null | undefined): NodeJS.Signals | null {
+  if (signal === null || signal === undefined) return null
   return (signal.startsWith('SIG') ? signal : `SIG${signal}`) as NodeJS.Signals
 }
 
