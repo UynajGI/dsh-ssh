@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Commit message hook: conventional commits keep the changelog and release
+# notes readable.
+
+npx --no -- commitlint --edit "$1"

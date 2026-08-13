@@ -1,0 +1,47 @@
+name: Release
+
+# Cut a release by pushing a version tag:
+#   git tag v0.1.1 && git push origin v0.1.1
+# The tag must match the `version` field in package.json; the workflow then
+# publishes to npm (automation token, bypasses 2FA) and drafts a GitHub
+# Release with auto-generated notes.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: publish dsh-ssh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org/
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+
+      - name: Verify tag matches package version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "error: tag v${TAG_VERSION} does not match package.json version ${PKG_VERSION}" >&2
+            exit 1
+          fi
+
+      - name: Publish to npm
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Draft GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true

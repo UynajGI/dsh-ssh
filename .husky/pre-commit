@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Pre-commit hook: the package is small, so a full typecheck is the cheapest
+# gate that catches both the staged change and its imports.
+
+npm run typecheck
