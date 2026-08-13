@@ -31,6 +31,6 @@ jobs:
       - run: npm ci
       - name: Verify the publishable tarball carries the src tree
         run: |
-          npm pack --dry-run
-          test -n "$(npm pack --dry-run 2>/dev/null | grep 'src/runtime.ts')" \
+          # npm notice lines go to stderr; keep both streams for the grep.
+          npm pack --dry-run 2>&1 | grep -q 'src/runtime.ts' \
             || { echo 'src tree missing from the publishable payload'; exit 1; }
