@@ -137,7 +137,7 @@ export async function spawnSshTerminal(ssh: SshRuntime, spec: SubprocessTerminal
   })
   const handle = new SshTerminalHandle(channel, spec.graceMs)
   const argv = spec.argv.map(quoteShellArg).join(' ')
-  await handle.write(`cd ${quoteShellArg(spec.cwd)} && exec env -i -- ${environment} ${argv}\r`)
+  await handle.write(`cd ${quoteShellArg(ssh.resolveRemoteCwd(spec.cwd))} && exec env -i -- ${environment} ${argv}\r`)
   spec.signal?.throwIfAborted()
   return handle
 }

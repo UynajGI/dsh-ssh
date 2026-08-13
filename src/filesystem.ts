@@ -129,7 +129,7 @@ export class SshFileSystem extends FileSystem {
   override async resolve(path: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<FsTarget> {
     assertNotAborted(opts?.signal, 'resolve')
     if (path.trim().length === 0) throw new FsError('file_path must be a non-empty string', 'FS_NOT_FOUND')
-    const displayPath = posix.resolve(opts?.cwd ?? this.ctx.ssh.cwd, path)
+    const displayPath = posix.resolve(this.ctx.ssh.resolveRemoteCwd(opts?.cwd), path)
     try {
       const targetKey = await this.canonicalPath(displayPath, opts?.signal)
       assertNotAborted(opts?.signal, 'resolve')
@@ -168,7 +168,7 @@ export class SshFileSystem extends FileSystem {
   override async lstat(path: string, opts?: { cwd?: string }, signal?: AbortSignal): Promise<FsPathInfo | undefined> {
     assertNotAborted(signal, 'lstat')
     if (path.trim().length === 0) throw new FsError('file_path must be a non-empty string', 'FS_NOT_FOUND')
-    const displayPath = posix.resolve(opts?.cwd ?? this.ctx.ssh.cwd, path)
+    const displayPath = posix.resolve(this.ctx.ssh.resolveRemoteCwd(opts?.cwd), path)
     const sftp = await this.ctx.ssh.getSftp()
     try {
       const stats = await new Promise<Stats>((resolve, reject) => {

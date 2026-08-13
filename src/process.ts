@@ -39,7 +39,7 @@ async function buildCommand(ssh: SshRuntime, spec: SubprocessSpawnSpec): Promise
   const remote = await readRemoteEnvironment(ssh)
   const environment = serializeEnvironment(scrubRemoteEnvironment(remote), spec.env)
   const argv = spec.argv.map(quoteShellArg).join(' ')
-  return `cd -- ${quoteShellArg(spec.cwd)} && exec env -i -- ${environment} ${argv}`
+  return `cd -- ${quoteShellArg(ssh.resolveRemoteCwd(spec.cwd))} && exec env -i -- ${environment} ${argv}`
 }
 
 /** SSH-backed subprocess handle. The channel does not expose a remote pid, so `pid` is `-1`. */

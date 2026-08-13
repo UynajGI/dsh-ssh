@@ -392,6 +392,23 @@ export class SshRuntime extends Service {
   }
 
   /**
+   * Map a caller-supplied working directory onto the remote host. The harness
+   * hands providers the session cwd, which is a local path when the harness
+   * runs on the developer machine; a local absolute path (Windows drive, UNC)
+   * or a relative path has no meaning on the remote host, so it is redirected
+   * to the configured remote cwd. A POSIX absolute path is a remote path and
+   * passes through unchanged.
+   * @param cwd - the caller-supplied working directory, or `undefined` for the default.
+   * @returns the remote working directory to execute in.
+   */
+  resolveRemoteCwd(cwd: string | undefined): string {
+    if (cwd === undefined) return this.cwd
+    if (posix.isAbsolute(cwd)) return cwd
+    if (/^[A-Za-z]:[\\/]/.test(cwd) || cwd.startsWith('//') || cwd.startsWith('\\\\')) return this.cwd
+    return posix.resolve(this.cwd, cwd)
+  }
+
+  /**
    * Run one control-plane command with collected output. Used by adapters for
    * executable lookup and canonical-path resolution, not for user work.
    * @param command - remote command text (already shell-quoted by the caller).
