@@ -29,8 +29,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Verify the publishable tarball carries the src tree
+      - run: npm run build
+      - name: Verify the publishable tarball carries the compiled lib tree
         run: |
           # npm notice lines go to stderr; keep both streams for the grep.
-          npm pack --dry-run 2>&1 | grep -q 'src/runtime.ts' \
-            || { echo 'src tree missing from the publishable payload'; exit 1; }
+          npm pack --dry-run 2>&1 | grep -q 'lib/index.js' \
+            || { echo 'lib tree missing from the publishable payload'; exit 1; }

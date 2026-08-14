@@ -223,6 +223,7 @@ picker opens at the remote home directly.
 ```sh
 npm i
 npm run typecheck
+npm run build       # emits lib/ — the compiled payload the harness loader imports
 ```
 
 - **Git hooks** (husky): `pre-commit` typechecks; `commit-msg` enforces [Conventional Commits](https://www.conventionalcommits.org/); `pre-push` rejects a version tag that does not match `package.json`.

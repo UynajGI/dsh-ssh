@@ -13,25 +13,44 @@
     "url": "https://github.com/UynajGI/dsh-ssh/issues"
   },
   "homepage": "https://github.com/UynajGI/dsh-ssh",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./ssh": "./src/runtime.ts",
-    "./subprocess": "./src/subprocess.ts",
-    "./fs": "./src/filesystem.ts",
-    "./picker": "./src/picker.ts",
-    "./invariant": "./src/invariant.ts",
-    "./src/*": "./src/*",
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./ssh": {
+      "types": "./lib/runtime.d.ts",
+      "default": "./lib/runtime.js"
+    },
+    "./subprocess": {
+      "types": "./lib/subprocess.d.ts",
+      "default": "./lib/subprocess.js"
+    },
+    "./fs": {
+      "types": "./lib/filesystem.d.ts",
+      "default": "./lib/filesystem.js"
+    },
+    "./picker": {
+      "types": "./lib/picker.d.ts",
+      "default": "./lib/picker.js"
+    },
+    "./invariant": {
+      "types": "./lib/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
-    "src"
+    "lib"
   ],
   "sideEffects": false,
   "scripts": {
+    "build": "tsc",
     "typecheck": "tsc --noEmit",
     "prepare": "husky",
+    "prepublishOnly": "npm run typecheck && npm run build",
     "release": "commit-and-tag-version"
   },
   "keywords": [

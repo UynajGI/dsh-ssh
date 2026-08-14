@@ -219,6 +219,7 @@ Web 界面的**添加工作区**流程（对话首屏的工作区选择器、侧
 ```sh
 npm i
 npm run typecheck
+npm run build       # 产出 lib/ —— harness 加载器实际导入的编译产物
 ```
 
 - **Git hooks**（husky）：`pre-commit` 跑 typecheck；`commit-msg` 强制 [Conventional Commits](https://www.conventionalcommits.org/)；`pre-push` 拒绝与 `package.json` 版本不一致的版本 tag。
