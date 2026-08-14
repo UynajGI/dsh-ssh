@@ -22,21 +22,26 @@
 
 # ── Web GUI 的「添加工作区」走远程目录（可选）────────────────────────────
 # dsh-ssh/picker 实现 directory-picker 能力接缝的 browse 后端：界面上
-# 「选择工作区目录」对话框直接浏览远程主机（SFTP）。它必须【替换】部署里
-# 已有的 directory-picker 行（web 包默认挂 -auto），不能并存，所以用同 id
-# 覆盖而不是 insert。替换 -auto 后它原来自动挂载的界面（browse surface）也
-# 没了，因此需要手动补挂官方自带的应用内目录浏览器这一行。
+# 「选择工作区目录」对话框直接浏览远程主机（SFTP）。
+#
+# 注意：补丁层的 name 是校验字段不是替换字段（名字对不上会跳过整条补丁），
+# 所以必须用 disabled 按 id 关掉部署里默认的 -auto 行（它动态挂载的界面会
+# 一起消失），再用自己的 id 插入 picker 和官方浏览界面。
 #
 # Windows 主机：本机目录照常可用，本地主目录级别顶部多一个「远程主机」
 # 入口（名字可用 remoteLabel 自定义），POSIX 绝对路径一律指向远程主机。
 # POSIX 主机：绝对路径都视为远程路径，选择器仅远程。
 
 - id: directory-picker
-  name: dsh-ssh/picker
-  config:
-    maxEntries: 1000            # 可选：单层目录行数上限（超出截断）
-    remoteLabel: '远程主机'      # 可选：本地主目录里远程入口的名字，默认 "Remote host user@host"
+  name: '@deepseek-ai/dsh-host-directory-picker-auto'
+  disabled: true
 
 - insert:
+    - id: directory-picker-ssh
+      name: dsh-ssh/picker
+      config:
+        maxEntries: 1000            # 可选：单层目录行数上限（超出截断）
+        remoteLabel: '远程主机'      # 可选：本地主目录里远程入口的名字，默认 "Remote host user@host"
+
     - id: ui-directory-picker-browse
       name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'

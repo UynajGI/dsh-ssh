@@ -95,28 +95,32 @@ remote paths as workspace paths the dsh-ssh providers already understand.
 - **POSIX hosts** serve the remote host only — every absolute path is a remote
   path there, so the local filesystem shares no vocabulary with it.
 
-The seam registers **one** `ctx.directoryPicker` per context, so this row must
-**replace** the deployment's existing picker row (the Web bundle mounts
-`@deepseek-ai/dsh-host-directory-picker-auto`) rather than sit beside it, and
-the shipped in-app browser surface must be composed explicitly because
-replacing `-auto` drops the surface it mounted. In the Web profile
+The seam registers **one** `ctx.directoryPicker` per context, and a patch layer's
+`name` is a match guard rather than a replacement, so the Web bundle's
+`@deepseek-ai/dsh-host-directory-picker-auto` row must be **disabled by id**
+(its dynamically mounted in-app browser surface disappears with it) and the SSH
+backend inserted under its own id. In the Web profile
 (`$DSH_HOME/profiles/web/cordis.patch.yml`):
 
 ```yaml
+# Disable the boot-resolved picker (its dynamic entries go with it).
+- id: directory-picker
+  name: '@deepseek-ai/dsh-host-directory-picker-auto'
+  disabled: true
+
 - insert:
     - id: ssh-remote
       name: dsh-ssh
       config: { ...same config as the quick start... }
 
-# Replace the boot-resolved picker with the SSH browse backend (override by id).
-- id: directory-picker
-  name: dsh-ssh/picker
-  config:
-    # maxEntries: 1000            # optional, one level's row bound (truncated flags a cut)
-    # remoteLabel: '远程主机'      # optional, pinned entry name (default: Remote host user@host)
+    # The SSH browse backend serving ctx.directoryPicker.
+    - id: directory-picker-ssh
+      name: dsh-ssh/picker
+      config:
+        # maxEntries: 1000            # optional, one level's row bound (truncated flags a cut)
+        # remoteLabel: '远程主机'      # optional, pinned entry name (default: Remote host user@host)
 
-# The shipped in-app directory browser (the -auto row used to mount it).
-- insert:
+    # The shipped in-app directory browser (the -auto row used to mount it).
     - id: ui-directory-picker-browse
       name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
 ```

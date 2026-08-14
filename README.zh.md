@@ -93,27 +93,31 @@ Web 界面的**添加工作区**流程（对话首屏的工作区选择器、侧
 - **POSIX 主机**上选择器仅远程：任何绝对路径都是远程路径，本机文件系统与
   远程共用同一套路径词汇，无法并存。
 
-该接缝每个上下文只注册**一个** `ctx.directoryPicker`，所以这一行必须
-**替换**部署里已有的 directory-picker 行（Web 包默认挂
-`@deepseek-ai/dsh-host-directory-picker-auto`），不能并存；而替换 `-auto` 后
-它原来自动挂载的界面也随之消失，需要手动补挂官方自带的应用内目录浏览器。
-在 Web profile（`$DSH_HOME/profiles/web/cordis.patch.yml`）中：
+该接缝每个上下文只注册**一个** `ctx.directoryPicker`；而补丁层的 `name` 是
+**校验字段**（名字对不上会跳过整条补丁，不是替换），所以要用 `disabled`
+按 id 关掉 Web 包默认挂载的 `@deepseek-ai/dsh-host-directory-picker-auto`
+行（它动态挂载的界面随之消失），再用自己的 id 插入 SSH 后端。在 Web
+profile（`$DSH_HOME/profiles/web/cordis.patch.yml`）中：
 
 ```yaml
+# 关闭启动时自动选择的 picker（它动态挂载的界面一起消失）
+- id: directory-picker
+  name: '@deepseek-ai/dsh-host-directory-picker-auto'
+  disabled: true
+
 - insert:
     - id: ssh-remote
       name: dsh-ssh
       config: { ...同快速开始的 config... }
 
-# 用 SSH browse 后端替换启动时自动选择的 picker（同 id 覆盖）
-- id: directory-picker
-  name: dsh-ssh/picker
-  config:
-    # maxEntries: 1000            # 可选：单层目录行数上限（超出截断）
-    # remoteLabel: '远程主机'      # 可选：钉住的远程入口名字（默认 Remote host user@host）
+    # 提供 ctx.directoryPicker 的 SSH browse 后端
+    - id: directory-picker-ssh
+      name: dsh-ssh/picker
+      config:
+        # maxEntries: 1000            # 可选：单层目录行数上限（超出截断）
+        # remoteLabel: '远程主机'      # 可选：钉住的远程入口名字（默认 Remote host user@host）
 
-# 官方自带的应用内目录浏览器（原本由 -auto 行自动挂载）
-- insert:
+    # 官方自带的应用内目录浏览器（原本由 -auto 行自动挂载）
     - id: ui-directory-picker-browse
       name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
 ```
