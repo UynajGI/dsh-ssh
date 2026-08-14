@@ -20,6 +20,7 @@
     "./ssh": "./src/runtime.ts",
     "./subprocess": "./src/subprocess.ts",
     "./fs": "./src/filesystem.ts",
+    "./picker": "./src/picker.ts",
     "./invariant": "./src/invariant.ts",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
@@ -40,7 +41,9 @@
     "ssh",
     "remote-development",
     "proxyjump",
-    "sftp"
+    "sftp",
+    "directory-picker",
+    "add-workspace"
   ],
   "engines": {
     "node": ">=22.0.0"
@@ -48,6 +51,7 @@
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-fs": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-host-directory-picker": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-subprocess": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-timeout": "^0.1.0-rc.6",

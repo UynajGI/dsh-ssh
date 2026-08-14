@@ -280,6 +280,9 @@ export class SshRuntime extends Service {
   /** Validated remote working directory shared by provider adapters. */
   readonly cwd: string
 
+  /** Human-readable connection target for UI surfaces (`username@host`). */
+  readonly endpoint: string
+
   private readonly config: ResolvedConfig
   private readonly hosts: ResolvedHost[]
   private clients: Client[] = []
@@ -296,6 +299,7 @@ export class SshRuntime extends Service {
     this.validate(resolved)
     this.config = resolved
     this.cwd = resolved.cwd
+    this.endpoint = `${resolved.username}@${resolved.host}`
     this.hosts = [...resolved.jump.map(jump => resolveJump(jump, resolved)), resolveHost(resolved)]
 
     ctx.effect(() => async () => {

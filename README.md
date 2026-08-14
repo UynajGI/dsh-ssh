@@ -78,6 +78,64 @@ The aggregate row is equivalent to three subpath rows — mount them separately 
   name: dsh-ssh/fs             # ctx.fs remote provider (SFTP)
 ```
 
+## Add-workspace over SSH (Web GUI)
+
+The Web surface's **Add workspace** flow (the conversation hero picker and the
+sidebar workspace browser) browses directories through the `ctx.directoryPicker`
+capability seam. `dsh-ssh/picker` implements that seam's `browse` capability over
+the shared SFTP channel, so the shipped **Select Workspace Directory** dialog
+lists remote directories, creates remote folders (SFTP mkdir), and adopts picked
+remote paths as workspace paths the dsh-ssh providers already understand.
+
+- **Windows hosts** serve both worlds in one picker: local browsing is
+  unchanged, and the remote host appears as a pinned `Remote host user@host`
+  entry on the local home level (label configurable via `remoteLabel`). Routing
+  follows `resolveRemoteCwd`: drive/UNC paths address the local disk,
+  POSIX-absolute paths address the remote host.
+- **POSIX hosts** serve the remote host only — every absolute path is a remote
+  path there, so the local filesystem shares no vocabulary with it.
+
+The seam registers **one** `ctx.directoryPicker` per context, so this row must
+**replace** the deployment's existing picker row (the Web bundle mounts
+`@deepseek-ai/dsh-host-directory-picker-auto`) rather than sit beside it, and
+the shipped in-app browser surface must be composed explicitly because
+replacing `-auto` drops the surface it mounted. In the Web profile
+(`$DSH_HOME/profiles/web/cordis.patch.yml`):
+
+```yaml
+- insert:
+    - id: ssh-remote
+      name: dsh-ssh
+      config: { ...same config as the quick start... }
+
+# Replace the boot-resolved picker with the SSH browse backend (override by id).
+- id: directory-picker
+  name: dsh-ssh/picker
+  config:
+    # maxEntries: 1000            # optional, one level's row bound (truncated flags a cut)
+    # remoteLabel: '远程主机'      # optional, pinned entry name (default: Remote host user@host)
+
+# The shipped in-app directory browser (the -auto row used to mount it).
+- insert:
+    - id: ui-directory-picker-browse
+      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
+```
+
+Picking a remote directory creates a workspace whose path is the remote path
+(`/home/user/project`); because `ctx.fs` and `ctx.subprocess` are the dsh-ssh
+remote providers, sessions in that workspace run entirely on the remote host.
+
+### Picker configuration (`dsh-ssh/picker`)
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `maxEntries` | number | 1000 | Complete-result bound for one listed level (hidden rows count; `truncated` flags a cut) |
+| `remoteLabel` | string | `Remote host user@host` | Name of the pinned remote entry on the local home level (Windows hosts) |
+
+The pinned remote entry opens the remote home directory (from the remote login
+environment; falls back to the configured remote `cwd`). On POSIX hosts the
+picker opens at the remote home directly.
+
 ## Configuration reference (`dsh-ssh/ssh`)
 
 | Field | Type | Default | Description |
@@ -121,6 +179,7 @@ The aggregate row is equivalent to three subpath rows — mount them separately 
 | Download (remote → local) | full fs provider: read / streamText (streaming decode) / readBytes (bounded) / listDir / stat / lstat |
 | Remote commands | subprocess provider: collect (bounded tail + local spill file), pipe, inherit, batch stdin |
 | Interactive terminals | PTY (`spawnTerminal`), I/O plus TERM→KILL cleanup |
+| Add-workspace GUI | `dsh-ssh/picker`: the directory-picker seam's `browse` backend over SFTP — the Web add-workspace dialog browses the remote host (pinned entry on Windows hosts) |
 | Environment isolation | remote login env scrubbed (`DSH_*` and credential-shaped names removed) + explicit overrides, launched via `env -i` |
 | Concurrency safety | fs writes serialized per target key (no interleaved writes) |
 | Host verification | `strictHostKeyChecking` + `knownHosts` (SHA256 fingerprints or raw keys) |
@@ -156,6 +215,7 @@ The aggregate row is equivalent to three subpath rows — mount them separately 
 - **Termination is not tree-scoped** — `terminate` signals the remote direct process (SIGTERM → grace → SIGKILL); descendants are not guaranteed to die (inherent to the SSH protocol, unlike the local provider's process groups).
 - **No foreground process group** — `inspectForeground` returns `undefined` and `signalForeground` throws (the SSH channel cannot resolve a remote foreground group).
 - **No reconnection** — a dropped connection requires a plugin restart.
+- **Picker is remote-only on POSIX hosts** — every absolute path is a remote path there, so the local filesystem cannot share the picker's vocabulary (Windows hosts keep both worlds via drive/UNC routing).
 - **Text-only streaming** — `streamText` rejects binary files with `FS_NOT_TEXT` (same as the official provider).
 
 ## Development

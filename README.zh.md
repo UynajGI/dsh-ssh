@@ -78,6 +78,60 @@ npm i dsh-ssh
   name: dsh-ssh/fs             # ctx.fs 远程 provider（SFTP）
 ```
 
+## 界面上的「添加工作区」走 SSH（Web GUI）
+
+Web 界面的**添加工作区**流程（对话首屏的工作区选择器、侧边栏的工作区浏览）
+通过 `ctx.directoryPicker` 能力接缝浏览目录。`dsh-ssh/picker` 基于共享 SFTP
+通道实现该接缝的 `browse` 能力，于是界面自带的**选择工作区目录**对话框直接
+浏览远程目录、可在远程新建文件夹（SFTP mkdir），选中的远程路径会成为工作区
+路径——dsh-ssh 的 provider 本来就能识别它。
+
+- **Windows 主机**上两种目录共用一个选择器：本机浏览完全不变，远程主机以
+  「远程主机」入口钉在本地主目录级别的顶部（名字可用 `remoteLabel` 自定义）。
+  路径路由与 `resolveRemoteCwd` 一致：盘符/UNC 路径指向本机磁盘，POSIX 绝对
+  路径指向远程主机。
+- **POSIX 主机**上选择器仅远程：任何绝对路径都是远程路径，本机文件系统与
+  远程共用同一套路径词汇，无法并存。
+
+该接缝每个上下文只注册**一个** `ctx.directoryPicker`，所以这一行必须
+**替换**部署里已有的 directory-picker 行（Web 包默认挂
+`@deepseek-ai/dsh-host-directory-picker-auto`），不能并存；而替换 `-auto` 后
+它原来自动挂载的界面也随之消失，需要手动补挂官方自带的应用内目录浏览器。
+在 Web profile（`$DSH_HOME/profiles/web/cordis.patch.yml`）中：
+
+```yaml
+- insert:
+    - id: ssh-remote
+      name: dsh-ssh
+      config: { ...同快速开始的 config... }
+
+# 用 SSH browse 后端替换启动时自动选择的 picker（同 id 覆盖）
+- id: directory-picker
+  name: dsh-ssh/picker
+  config:
+    # maxEntries: 1000            # 可选：单层目录行数上限（超出截断）
+    # remoteLabel: '远程主机'      # 可选：钉住的远程入口名字（默认 Remote host user@host）
+
+# 官方自带的应用内目录浏览器（原本由 -auto 行自动挂载）
+- insert:
+    - id: ui-directory-picker-browse
+      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
+```
+
+在对话框里选中远程目录后，工作区路径就是远程路径（如 `/home/user/project`）；
+因为 `ctx.fs` 和 `ctx.subprocess` 都是 dsh-ssh 的远程 provider，该工作区里的
+会话完全运行在远程主机上。
+
+### 选择器配置（`dsh-ssh/picker`）
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `maxEntries` | number | 1000 | 单层目录行数上限（隐藏行计入；超出时 `truncated` 标记截断） |
+| `remoteLabel` | string | `Remote host user@host` | 本地主目录里远程入口的显示名（仅 Windows 主机） |
+
+钉住的远程入口打开的是远程主目录（取自远程登录环境，取不到时回退到配置的
+远程 `cwd`）。POSIX 主机上选择器直接以远程主目录作为初始目录。
+
 ## 配置参考（`dsh-ssh/ssh`）
 
 | 字段 | 类型 | 默认 | 说明 |
@@ -121,6 +175,7 @@ npm i dsh-ssh
 | 远端下载 | fs provider 全套：read / streamText（流式解码）/ readBytes（限量）/ listDir / stat / lstat |
 | 远程命令 | subprocess provider：collect（tail 保留 + 本地 spill 文件）、pipe、inherit、批量 stdin |
 | 交互终端 | PTY（`spawnTerminal`），输入输出 + TERM→KILL 清理 |
+| 添加工作区 GUI | `dsh-ssh/picker`：directory-picker 接缝的 `browse` 后端（走 SFTP）——界面添加工作区对话框直接浏览远程主机（Windows 上钉入口） |
 | 环境隔离 | 远端登录环境 scrub（剔除 `DSH_*` 与凭据形变量）+ 显式 env 覆盖，`env -i` 启动 |
 | 并发安全 | fs 写操作按 targetKey 串行化（防并发写同一文件） |
 | 主机校验 | `strictHostKeyChecking` + `knownHosts`（SHA256 指纹或原始公钥） |
@@ -156,6 +211,7 @@ npm i dsh-ssh
 - **终止不保证进程树**：`terminate` 通过 channel 信号（SIGTERM → grace → SIGKILL）作用于远程直接进程，不保证覆盖其子进程树（SSH 协议固有，与本地 provider 的进程组语义有差距）。
 - **终端前台进程组**：`inspectForeground` 返回 `undefined`，`signalForeground` 不可用（SSH channel 无法解析远端前台进程组）。
 - **单连接不重连**：连接断开后需重启插件。
+- **POSIX 主机上选择器仅远程**：任何绝对路径都是远程路径，本机文件系统无法与远程共用选择器（Windows 主机通过盘符/UNC 路由两者共存）。
 - **`streamText` 仅文本**：二进制文件抛 `FS_NOT_TEXT`（与官方 provider 一致）。
 
 ## 开发
