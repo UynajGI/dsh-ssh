@@ -2,14 +2,14 @@
 
 import { SENSITIVE_ENV_PATTERN } from '@deepseek-ai/dsh-subprocess'
 import { quoteShellArg } from './runtime.ts'
-import type SshRuntime from './runtime.ts'
+import type { SshTransport } from './transport.ts'
 
 /**
  * Read the remote login environment, cached on the shared connection owner.
- * @param ssh - shared SSH connection owner.
+ * @param ssh - connection owner backing this execution world.
  * @returns the remote environment as name/value entries.
  */
-export async function readRemoteEnvironment(ssh: SshRuntime): Promise<Record<string, string>> {
+export async function readRemoteEnvironment(ssh: SshTransport): Promise<Record<string, string>> {
   return ssh.getRemoteEnvironment()
 }
 

@@ -3,6 +3,8 @@
     "target": "es2024",
     "module": "nodenext",
     "moduleResolution": "nodenext",
+    "jsx": "react-jsx",
+    "lib": ["es2024", "dom", "dom.iterable"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
@@ -18,6 +20,7 @@
     "declaration": true,
     "sourceMap": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/filesystem.ts", "src/filesystem-routed.ts"]
 }
 

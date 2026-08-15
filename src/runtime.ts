@@ -407,6 +407,9 @@ export class SshRuntime extends Service {
    */
   resolveRemoteCwd(cwd: string | undefined): string {
     if (cwd === undefined) return this.cwd
+      if (cwd.startsWith('ssh://')) {
+        throw new Error('dsh-ssh: ssh:// working directories must be routed through ctx.subprocess or ctx.fs; ctx.ssh cannot choose a registry connection')
+      }
     if (posix.isAbsolute(cwd)) return cwd
     if (/^[A-Za-z]:[\\/]/.test(cwd) || cwd.startsWith('//') || cwd.startsWith('\\\\')) return this.cwd
     return posix.resolve(this.cwd, cwd)
@@ -422,7 +425,8 @@ export class SshRuntime extends Service {
   async exec(command: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<ExecOutcome> {
     opts?.signal?.throwIfAborted()
     const client = await this.getClient()
-    const text = opts?.cwd !== undefined ? wrapCwd(opts.cwd, command) : command
+    const resolvedCwd = opts?.cwd !== undefined ? this.resolveRemoteCwd(opts.cwd) : undefined
+      const text = resolvedCwd !== undefined ? wrapCwd(resolvedCwd, command) : command
     const outcome = await new Promise<ExecOutcome>((resolve, reject) => {
       // Buffer whole chunks and decode once: SSH data events may split a
       // multi-byte UTF-8 character across two callbacks, so per-chunk

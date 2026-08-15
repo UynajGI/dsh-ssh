@@ -18,6 +18,7 @@ import type {
 } from '@deepseek-ai/dsh-subprocess'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { quoteShellArg } from './runtime.ts'
+import { resolveSshCwd } from './transport.ts'
 import { SshSubprocessHandle } from './process.ts'
 import { spawnSshTerminal } from './terminal.ts'
 import type { SshTerminalHandle } from './terminal.ts'
@@ -113,7 +114,8 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
     if (spec.signal?.aborted === true) {
       throw new Error(`aborted before spawn: ${String(spec.signal.reason)}`)
     }
-    const handle = new SshSubprocessHandle(this.ctx.ssh, spec, this.spillDir)
+    const route = resolveSshCwd(this.ctx, spec.cwd)
+      const handle = new SshSubprocessHandle(route.transport, route.cwd, spec, this.spillDir)
     this.live.add(handle)
     const release = async (): Promise<void> => {
       await handle.waitForExit()
@@ -132,7 +134,8 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
     }
     requireRepresentableGrace(spec.graceMs)
     spec.signal?.throwIfAborted()
-    const terminal = await spawnSshTerminal(this.ctx.ssh, spec)
+    const route = resolveSshCwd(this.ctx, spec.cwd)
+      const terminal = await spawnSshTerminal(route.transport, route.cwd, spec)
     if (this.disposing) {
       await terminal.terminate()
       throw new Error('subprocess-ssh: service disposed during terminal setup')

@@ -29,12 +29,20 @@
       "default": "./lib/subprocess.js"
     },
     "./fs": {
-      "types": "./lib/filesystem.d.ts",
-      "default": "./lib/filesystem.js"
+      "types": "./lib/filesystem-final.d.ts",
+      "default": "./lib/filesystem-final.js"
     },
     "./picker": {
       "types": "./lib/picker.d.ts",
       "default": "./lib/picker.js"
+    },
+    "./web": {
+      "types": "./lib/web.d.ts",
+      "default": "./lib/web.js"
+    },
+    "./client": {
+      "types": "./lib/client/index.d.ts",
+      "default": "./lib/client.js"
     },
     "./invariant": {
       "types": "./lib/invariant.d.ts",
@@ -42,12 +50,24 @@
     },
     "./package.json": "./package.json"
   },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+          "@deepseek-ai/dsh-client-runtime",
+          "@deepseek-ai/dsh-client-ui-conversation",
+          "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ],
+      "platform": "web"
+    }
+  },
   "files": [
     "lib"
   ],
   "sideEffects": false,
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && tsdown",
     "typecheck": "tsc --noEmit",
     "prepare": "husky",
     "prepublishOnly": "npm run typecheck && npm run build",
@@ -81,9 +101,13 @@
     "@commitlint/cli": "^19.0.0",
     "@commitlint/config-conventional": "^19.0.0",
     "@types/node": "^22.0.0",
+    "@types/react": "^18.3.1",
     "@types/ssh2": "^1.15.5",
     "commit-and-tag-version": "^13.1.2",
     "husky": "^9.0.0",
+    "lightningcss": "^1.32.0",
+    "react": "^18.3.1",
+    "tsdown": "^0.22.2",
     "tsx": "^4.23.12",
     "typescript": "^6.0.0"
   }

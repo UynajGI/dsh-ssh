@@ -10,7 +10,7 @@ import type {
   SubprocessTerminalSpawnSpec,
 } from '@deepseek-ai/dsh-subprocess'
 import { quoteShellArg } from './runtime.ts'
-import type SshRuntime from './runtime.ts'
+import type { SshTransport } from './transport.ts'
 import { readRemoteEnvironment, scrubRemoteEnvironment, serializeEnvironment } from './environment.ts'
 
 /** Normalize an SSH signal name into the `SIG…` vocabulary the seam carries. */
@@ -115,11 +115,12 @@ export class SshTerminalHandle implements SubprocessTerminalHandle {
 /**
  * Allocate an SSH PTY, replace its login shell with the requested argv, and
  * return the live terminal handle.
- * @param ssh - shared SSH connection owner.
+ * @param ssh - connection owner backing this execution world.
+ * @param cwd - resolved absolute remote working directory.
  * @param spec - fully specified terminal-process request.
  * @returns the live terminal handle after allocation succeeds.
  */
-export async function spawnSshTerminal(ssh: SshRuntime, spec: SubprocessTerminalSpawnSpec): Promise<SshTerminalHandle> {
+export async function spawnSshTerminal(ssh: SshTransport, cwd: string, spec: SubprocessTerminalSpawnSpec): Promise<SshTerminalHandle> {
   spec.signal?.throwIfAborted()
   const program = spec.argv[0]
   if (program === undefined || program.length === 0) {
@@ -137,7 +138,7 @@ export async function spawnSshTerminal(ssh: SshRuntime, spec: SubprocessTerminal
   })
   const handle = new SshTerminalHandle(channel, spec.graceMs)
   const argv = spec.argv.map(quoteShellArg).join(' ')
-  await handle.write(`cd ${quoteShellArg(ssh.resolveRemoteCwd(spec.cwd))} && exec env -i -- ${environment} ${argv}\r`)
+  await handle.write(`cd ${quoteShellArg(cwd)} && exec env -i -- ${environment} ${argv}\r`)
   spec.signal?.throwIfAborted()
   return handle
 }

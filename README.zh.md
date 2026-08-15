@@ -81,23 +81,25 @@ npm i dsh-ssh
 ## 界面上的「添加工作区」走 SSH（Web GUI）
 
 Web 界面的**添加工作区**流程（对话首屏的工作区选择器、侧边栏的工作区浏览）
-通过 `ctx.directoryPicker` 能力接缝浏览目录。`dsh-ssh/picker` 基于共享 SFTP
-通道实现该接缝的 `browse` 能力，于是界面自带的**选择工作区目录**对话框直接
-浏览远程目录、可在远程新建文件夹（SFTP mkdir），选中的远程路径会成为工作区
-路径——dsh-ssh 的 provider 本来就能识别它。
+由 dsh-ssh 的客户端 UI 接管：上面保留本机目录浏览，下面列出**连接注册表**里
+的远程连接（可「＋ 新建远程」）。本机列表继续走 `ctx.directoryPicker` 的
+`browse` 能力；远程列表与连接管理走 dsh-ssh 自己的 `/dsh-ssh` RPC 通道。
 
-- **Windows 主机**上两种目录共用一个选择器：本机浏览完全不变，远程主机以
-  「远程主机」入口钉在本地主目录级别的顶部（名字可用 `remoteLabel` 自定义）。
-  路径路由与 `resolveRemoteCwd` 一致：盘符/UNC 路径指向本机磁盘，POSIX 绝对
-  路径指向远程主机。
-- **POSIX 主机**上选择器仅远程：任何绝对路径都是远程路径，本机文件系统与
-  远程共用同一套路径词汇，无法并存。
+选中远程目录后，客户端直接创建会话：
 
-该接缝每个上下文只注册**一个** `ctx.directoryPicker`；而补丁层的 `name` 是
-**校验字段**（名字对不上会跳过整条补丁，不是替换），所以要用 `disabled`
-按 id 关掉 Web 包默认挂载的 `@deepseek-ai/dsh-host-directory-picker-auto`
-行（它动态挂载的界面随之消失），再用自己的 id 插入 SSH 后端。在 Web
-profile（`$DSH_HOME/profiles/web/cordis.patch.yml`）中：
+```ts
+ctx.sessions.create({ cwd: `ssh://${connectionId}${remotePath}` })
+```
+
+`ctx.subprocess` 与 `ctx.fs` 识别 `ssh://<id>/<path>` cwd，并把该会话的
+bash / 文件 / 终端操作路由到对应注册连接的对应目录。`ssh://` 目前不会写入
+DSH 本地 workspace 注册表（见「已知限制」）。
+
+挂载三行：聚合 provider 行 + 本机/远程目录 browse 后端 + 连接注册表与 RPC
+通道。补丁层的 `name` 是**校验字段**（名字对不上会跳过整条补丁，不是替换），
+所以要用 `disabled` 按 id 关掉 Web 包默认挂载的
+`@deepseek-ai/dsh-host-directory-picker-auto` 行（它动态挂载的界面随之
+消失）。在 Web profile（`$DSH_HOME/profiles/web/cordis.patch.yml`）中：
 
 ```yaml
 # 关闭启动时自动选择的 picker（它动态挂载的界面一起消失）
@@ -110,31 +112,31 @@ profile（`$DSH_HOME/profiles/web/cordis.patch.yml`）中：
       name: dsh-ssh
       config: { ...同快速开始的 config... }
 
-    # 提供 ctx.directoryPicker 的 SSH browse 后端
+    # 本机目录 browse 后端（dsh-ssh 客户端会注册两个 directoryFlow 槽位）
     - id: directory-picker-ssh
       name: dsh-ssh/picker
       config:
-        # maxEntries: 1000            # 可选：单层目录行数上限（超出截断）
-        # remoteLabel: '远程主机'      # 可选：钉住的远程入口名字（默认 Remote host user@host）
+        maxEntries: 1000
 
-    # 官方自带的应用内目录浏览器（原本由 -auto 行自动挂载）
-    - id: ui-directory-picker-browse
-      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
+    # 多连接注册表 + /dsh-ssh RPC（连接持久化与远程目录浏览）
+    - id: ssh-web-channel
+      name: dsh-ssh/web
+      config:
+        maxEntries: 1000
 ```
 
-在对话框里选中远程目录后，工作区路径就是远程路径（如 `/home/user/project`）；
-因为 `ctx.fs` 和 `ctx.subprocess` 都是 dsh-ssh 的远程 provider，该工作区里的
-会话完全运行在远程主机上。
+远程会话打开后，bash / 文件 / 终端工具都跑在所选连接的 `ssh://` 路径上。
 
 ### 选择器配置（`dsh-ssh/picker`）
 
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
 | `maxEntries` | number | 1000 | 单层目录行数上限（隐藏行计入；超出时 `truncated` 标记截断） |
-| `remoteLabel` | string | `Remote host user@host` | 本地主目录里远程入口的显示名（仅 Windows 主机） |
+| `remoteLabel` | string | — | 保留字段：当前客户端流程不再使用钉住入口，远程入口在下方连接列表里 |
 
-钉住的远程入口打开的是远程主目录（取自远程登录环境，取不到时回退到配置的
-远程 `cwd`）。POSIX 主机上选择器直接以远程主目录作为初始目录。
+`dsh-ssh/picker` 现在只承担 `ctx.directoryPicker` 的 browse 后端（Windows 上
+本机目录照常可用，POSIX 绝对路径走聚合 SSH 连接）。客户端 UI 的远程连接
+列表与目录浏览改走 `dsh-ssh/web` 的 RPC。
 
 ## 配置参考（`dsh-ssh/ssh`）
 
@@ -215,6 +217,7 @@ profile（`$DSH_HOME/profiles/web/cordis.patch.yml`）中：
 - **终止不保证进程树**：`terminate` 通过 channel 信号（SIGTERM → grace → SIGKILL）作用于远程直接进程，不保证覆盖其子进程树（SSH 协议固有，与本地 provider 的进程组语义有差距）。
 - **终端前台进程组**：`inspectForeground` 返回 `undefined`，`signalForeground` 不可用（SSH channel 无法解析远端前台进程组）。
 - **单连接不重连**：连接断开后需重启插件。
+- **远程目录以会话落地**：多连接界面选中远程目录后通过 `session.create({ cwd: 'ssh://<id>/<path>' })` 打开远程会话；它不会在 DSH 的本地 workspace 注册表里创建 workspace 记录（`dsh-workspace` 仍只接受本地 `fs.realpath` 目录）。
 - **POSIX 主机上选择器仅远程**：任何绝对路径都是远程路径，本机文件系统无法与远程共用选择器（Windows 主机通过盘符/UNC 路由两者共存）。
 - **`streamText` 仅文本**：二进制文件抛 `FS_NOT_TEXT`（与官方 provider 一致）。
 

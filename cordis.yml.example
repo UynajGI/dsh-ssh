@@ -1,8 +1,10 @@
 # dsh-ssh 配置示例：单跳板 + 目标机，装完 dsh-ssh 后改成你自己的值
 # （Web profile 的 cordis.patch.yml / headless 的 --patch 文件同格式）
 - insert:
-    - id: ssh
-      name: dsh-ssh/ssh
+    # 一行聚合 = ssh + subprocess + fs 三个远程 provider；Web GUI 的客户端
+    # bundle 也随 `name: dsh-ssh` 这一行自动发现。
+    - id: ssh-remote
+      name: dsh-ssh
       config:
         host: 10.0.0.5
         port: 22
@@ -14,22 +16,16 @@
             username: ubuntu
             privateKey: ~/.ssh/id_ed25519
 
-    - id: subprocess-ssh
-      name: dsh-ssh/subprocess
-
-    - id: fs-ssh
-      name: dsh-ssh/fs
-
 # ── Web GUI 的「添加工作区」走远程目录（可选）────────────────────────────
 # dsh-ssh/picker 实现 directory-picker 能力接缝的 browse 后端：界面上
 # 「选择工作区目录」对话框直接浏览远程主机（SFTP）。
 #
 # 注意：补丁层的 name 是校验字段不是替换字段（名字对不上会跳过整条补丁），
 # 所以必须用 disabled 按 id 关掉部署里默认的 -auto 行（它动态挂载的界面会
-# 一起消失），再用自己的 id 插入 picker 和官方浏览界面。
+# 一起消失），再用自己的 id 插入 picker 和 dsh-ssh/web。
 #
-# Windows 主机：本机目录照常可用，本地主目录级别顶部多一个「远程主机」
-# 入口（名字可用 remoteLabel 自定义），POSIX 绝对路径一律指向远程主机。
+# Windows 主机：dsh-ssh 客户端会注册「上面本地目录 + 下面远程连接管理」的
+# 添加工作区流程；选中远程目录后以 ssh://<id>/<path> 作为会话 cwd 打开。
 # POSIX 主机：绝对路径都视为远程路径，选择器仅远程。
 
 - id: directory-picker
@@ -37,11 +33,14 @@
   disabled: true
 
 - insert:
+    # 本机目录 browse 后端；dsh-ssh 客户端会注册两个 directoryFlow 槽位
     - id: directory-picker-ssh
       name: dsh-ssh/picker
       config:
         maxEntries: 1000            # 可选：单层目录行数上限（超出截断）
-        remoteLabel: '远程主机'      # 可选：本地主目录里远程入口的名字，默认 "Remote host user@host"
 
-    - id: ui-directory-picker-browse
-      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
+    # 多连接注册表 + /dsh-ssh RPC（持久化、~/.ssh/config 识别、远程目录浏览）
+    - id: ssh-web-channel
+      name: dsh-ssh/web
+      config:
+        maxEntries: 1000

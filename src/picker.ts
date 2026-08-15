@@ -57,12 +57,18 @@ export interface Config {
    * (Windows hosts only). Defaults to `Remote host <username>@<host>`.
    */
   remoteLabel?: string
+  /**
+   * Name of the pinned local-host entry shown on the remote home level
+   * (Windows hosts only). Defaults to `Local host`.
+   */
+  localLabel?: string
 }
 
 /** Resolved config with every default filled by Schemastery before construction. */
 interface ResolvedConfig {
   maxEntries: number
   remoteLabel?: string
+  localLabel?: string
 }
 
 /** The thrown value as an Error (wire/abort reasons may be anything). */
@@ -240,6 +246,7 @@ export class SshDirectoryPicker extends DirectoryPicker {
   static Config: z<Config> = z.object({
     maxEntries: z.natural().min(1).default(1e3),
     remoteLabel: z.string(),
+    localLabel: z.string(),
   })
 
   private readonly config: ResolvedConfig
@@ -266,15 +273,15 @@ export class SshDirectoryPicker extends DirectoryPicker {
 
   /**
    * List one directory level.
-   * @param path - absolute directory to list; absent lists the home level
-   *   (the local home on Windows hosts, the remote home on POSIX hosts).
+   * @param path - absolute directory to list; absent lists the local home on
+   *   Windows hosts (the add-workspace dialog opens on the local machine) and
+   *   the remote home elsewhere.
    * @param signal - caller lifetime; abort stops the scan and rejects.
    * @returns the level's listing with ancestry.
    */
   async list(path?: string, signal?: AbortSignal): Promise<DirectoryListing> {
     if (path === undefined) {
-      if (this.dualMode) return this.listLocal(this.localHome, signal)
-      return this.listRemote(await this.remoteHome(), signal)
+      return this.dualMode ? this.listLocal(this.localHome, signal) : this.listRemote(await this.remoteHome(), signal)
     }
     if (this.isLocalPath(path)) return this.listLocal(resolve(path), signal)
     if (posix.isAbsolute(path)) return this.listRemote(path, signal)
@@ -327,6 +334,12 @@ export class SshDirectoryPicker extends DirectoryPicker {
   private remoteEntryLabel(): string {
     if (this.config.remoteLabel !== undefined) return this.config.remoteLabel
     return `Remote host ${this.ctx.ssh.endpoint}`
+  }
+
+  /** The pinned local entry's display name. */
+  private localEntryLabel(): string {
+    if (this.config.localLabel !== undefined) return this.config.localLabel
+    return 'Local host'
   }
 
   /** List one remote level over the shared SFTP channel. */
@@ -415,11 +428,6 @@ export class SshDirectoryPicker extends DirectoryPicker {
         break
       }
       entries.push(row)
-    }
-    // The home level pins the remote host as its first row: the discoverable
-    // "remote workspace" option of the add-workspace dialog.
-    if (target.toLowerCase() === this.localHome.toLowerCase()) {
-      entries.unshift({ name: this.remoteEntryLabel(), path: await this.remoteHome(), hidden: false })
     }
     return {
       path: target,

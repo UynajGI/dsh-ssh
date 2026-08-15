@@ -11,7 +11,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import SshRuntime from './runtime.ts'
 import type { Config } from './runtime.ts'
 import SshSubprocessRuntime from './subprocess.ts'
-import SshFileSystem from './filesystem.ts'
+import SshFileSystem from './filesystem-final.ts'
 
 /**
  * Mount the aggregate plugin.

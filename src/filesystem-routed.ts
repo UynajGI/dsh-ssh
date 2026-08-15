@@ -1,13 +1,18 @@
 /**
  * SSH provider for the filesystem capability seam. Paths, contents, and
  * atomic staging files remain inside the remote host, reached through SFTP.
+ *
+ * This is the routed backend: a caller cwd of the form
+ * `ssh://<connectionId>/<path>` selects a registry-owned SSH connection, and
+ * the resulting target keys carry that route. The aggregate `ctx.ssh`
+ * connection remains the default for ordinary POSIX paths and the local-path
+ * redirection convention.
  * @module @deepseek-ai/dsh-fs-ssh
  */
 
 import { createHash, randomUUID } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 import { posix } from 'node:path'
-import { promisify } from 'node:util'
 import type { Readable } from 'node:stream'
 import type { SFTPWrapper, Stats } from 'ssh2'
 import { FileSystem, FsError, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
@@ -22,7 +27,7 @@ import type {
   FsWriteOutcome,
 } from '@deepseek-ai/dsh-fs'
 import { quoteShellArg } from './runtime.ts'
-import { resolveSshCwd, resolveSshTargetKey, sshTargetKey } from './transport.ts'
+import { parseSshTargetKey, resolveSshCwd, resolveSshTargetKey, sshTargetKey } from './transport.ts'
 import type { SshTransport } from './transport.ts'
 
 const BINARY_SAMPLE_BYTES = 8192
@@ -122,7 +127,7 @@ function literalEdit(content: string, request: FsEditRequest, displayPath: strin
   return request.replaceAll ? content.split(oldString).join(newString) : content.replace(oldString, newString)
 }
 
-/** Remote filesystem backend sharing the SFTP channel owned by `ctx.ssh`. */
+/** Remote filesystem backend sharing the SFTP channel owned by the selected transport. */
 export class SshFileSystem extends FileSystem {
   static inject = ['ssh']
 
@@ -152,10 +157,13 @@ export class SshFileSystem extends FileSystem {
   override async resolve(path: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<FsTarget> {
     assertNotAborted(opts?.signal, 'resolve')
     if (path.trim().length === 0) throw new FsError('file_path must be a non-empty string', 'FS_NOT_FOUND')
-    const displayPath = posix.resolve(this.ctx.ssh.resolveRemoteCwd(opts?.cwd), path)
+    const route = this.routeCwd(opts?.cwd)
+    const remotePath = posix.resolve(route.base, path)
+    const displayPath = route.connectionId === undefined ? remotePath : sshTargetKey(route.connectionId, remotePath)
     try {
-      const targetKey = await this.canonicalPath(displayPath, opts?.signal)
+      const canonical = await this.canonicalPath(remotePath, opts?.signal, route.transport)
       assertNotAborted(opts?.signal, 'resolve')
+      const targetKey = route.connectionId === undefined ? canonical : sshTargetKey(route.connectionId, canonical)
       return { targetKey: FsTargetKey(targetKey), displayPath }
     } catch (error: unknown) {
       throw mapError(error, 'resolve', displayPath, opts?.signal)
@@ -163,7 +171,7 @@ export class SshFileSystem extends FileSystem {
   }
 
   override processPath(target: FsTarget): string {
-    return String(target.targetKey)
+    return this.pathOf(target)
   }
 
   override fileUrl(target: FsTarget): string {
@@ -173,16 +181,20 @@ export class SshFileSystem extends FileSystem {
   }
 
   override contains(parent: FsTarget, child: FsTarget): boolean {
-    const relative = posix.relative(this.processPath(parent), this.processPath(child))
+    const parentRoute = parseSshTargetKey(String(parent.targetKey))
+    const childRoute = parseSshTargetKey(String(child.targetKey))
+    if (parentRoute.connectionId !== childRoute.connectionId) return false
+    const relative = posix.relative(parentRoute.path, childRoute.path)
     return relative === '' || (relative !== '..' && !relative.startsWith('../') && !posix.isAbsolute(relative))
   }
 
   override async stat(target: FsTarget, signal?: AbortSignal): Promise<FsInfo | undefined> {
     assertNotAborted(signal, 'stat')
-    const stats = await this.probe(String(target.targetKey), target.displayPath, signal)
+    const route = this.routeTarget(target)
+    const stats = await this.probe(route.path, target.displayPath, signal, route.transport)
     if (stats === undefined) return undefined
     return {
-      version: entryVersion(stats, String(target.targetKey)),
+      version: entryVersion(stats, route.path),
       type: entryType(stats),
       ...(stats.isFile() ? { size: stats.size } : {}),
     }
@@ -191,8 +203,9 @@ export class SshFileSystem extends FileSystem {
   override async lstat(path: string, opts?: { cwd?: string }, signal?: AbortSignal): Promise<FsPathInfo | undefined> {
     assertNotAborted(signal, 'lstat')
     if (path.trim().length === 0) throw new FsError('file_path must be a non-empty string', 'FS_NOT_FOUND')
-    const displayPath = posix.resolve(this.ctx.ssh.resolveRemoteCwd(opts?.cwd), path)
-    const sftp = await this.ctx.ssh.getSftp()
+    const route = this.routeCwd(opts?.cwd)
+    const displayPath = posix.resolve(route.base, path)
+    const sftp = await route.transport.getSftp()
     try {
       const stats = await new Promise<Stats>((resolve, reject) => {
         sftp.lstat(displayPath, (error, value) => { if (error !== undefined) reject(error); else resolve(value) })
@@ -229,9 +242,10 @@ export class SshFileSystem extends FileSystem {
 
   override async streamText(target: FsTarget, signal?: AbortSignal): Promise<AsyncIterable<string>> {
     await this.requireRegular(target, signal)
-    const sftp = await this.ctx.ssh.getSftp()
+    const route = this.routeTarget(target)
+    const sftp = await route.transport.getSftp()
     const displayPath = target.displayPath
-    const stream = sftp.createReadStream(String(target.targetKey)) as Readable
+    const stream = sftp.createReadStream(route.path) as Readable
     return {
       async *[Symbol.asyncIterator](): AsyncGenerator<string> {
         const decoder = new TextDecoder('utf-8', { fatal: true })
@@ -268,20 +282,26 @@ export class SshFileSystem extends FileSystem {
     const info = await this.stat(target, signal)
     if (info === undefined) throw new FsError(`cannot list "${target.displayPath}": not found`, 'FS_NOT_FOUND')
     if (info.type !== 'directory') throw new FsError(`cannot list "${target.displayPath}": not a directory`, 'FS_NOT_DIRECTORY')
-    const sftp = await this.ctx.ssh.getSftp()
+    const route = this.routeTarget(target)
+    const sftp = await route.transport.getSftp()
     try {
       const listed = await new Promise<Array<{ filename: string; attrs: Stats }>>((resolve, reject) => {
-        sftp.readdir(String(target.targetKey), (error, value) => { if (error !== undefined) reject(error); else resolve(value) })
+        sftp.readdir(route.path, (error, value) => { if (error !== undefined) reject(error); else resolve(value) })
       })
       assertNotAborted(signal, 'list')
       const entries: FsDirEntry[] = []
       for (const entry of listed) {
-        const displayPath = posix.join(target.displayPath, entry.filename)
-        const canonical = await this.canonicalPath(displayPath, signal)
+        const targetRoute = parseSshTargetKey(String(target.targetKey))
+        const remotePath = posix.join(route.path, entry.filename)
+        const displayPath = targetRoute.connectionId === undefined ? remotePath : sshTargetKey(targetRoute.connectionId, remotePath)
+        const remotePath = posix.join(route.path, entry.filename)
+        const canonical = await this.canonicalPath(remotePath, signal, route.transport)
+        const connectionId = parseSshTargetKey(String(target.targetKey)).connectionId
+        const childKey = connectionId === undefined ? canonical : sshTargetKey(connectionId, canonical)
         entries.push({
           name: entry.filename,
           type: entryType(entry.attrs),
-          target: { targetKey: FsTargetKey(canonical), displayPath },
+          target: { targetKey: FsTargetKey(childKey), displayPath },
           version: entryVersion(entry.attrs, canonical),
           ...(entry.attrs.isFile() ? { size: entry.attrs.size } : {}),
         })
@@ -299,7 +319,8 @@ export class SshFileSystem extends FileSystem {
     signal?: AbortSignal,
   ): Promise<FsWriteOutcome> {
     return this.withLock(String(target.targetKey), async () => {
-      const existing = await this.probe(String(target.targetKey), target.displayPath, signal)
+      const route = this.routeTarget(target)
+      const existing = await this.probe(route.path, target.displayPath, signal, route.transport)
       if (existing !== undefined && !existing.isFile()) {
         throw new FsError(`cannot write "${target.displayPath}": not a regular file`, 'FS_NOT_REGULAR_FILE')
       }
@@ -322,14 +343,15 @@ export class SshFileSystem extends FileSystem {
     signal?: AbortSignal,
   ): Promise<FsEditOutcome> {
     return this.withLock(String(target.targetKey), async () => {
-      const existing = await this.probe(String(target.targetKey), target.displayPath, signal)
+      const route = this.routeTarget(target)
+      const existing = await this.probe(route.path, target.displayPath, signal, route.transport)
       if (existing === undefined) {
         throw new FsError(`cannot edit "${target.displayPath}": file changed since it was read`, 'FS_STALE_VERSION')
       }
       if (!existing.isFile()) {
         throw new FsError(`cannot edit "${target.displayPath}": not a regular file`, 'FS_NOT_REGULAR_FILE')
       }
-      if (expected !== undefined && entryVersion(existing, String(target.targetKey)) !== expected.version) {
+      if (expected !== undefined && entryVersion(existing, route.path) !== expected.version) {
         throw new FsError(`cannot edit "${target.displayPath}": file changed since it was read`, 'FS_STALE_VERSION')
       }
       const raw = await this.readForEdit(target, signal)
@@ -353,8 +375,8 @@ export class SshFileSystem extends FileSystem {
     }
   }
 
-  private async canonicalPath(path: string, signal?: AbortSignal): Promise<string> {
-    const result = await this.ctx.ssh.exec(
+  private async canonicalPath(path: string, signal?: AbortSignal, transport: SshTransport = this.ctx.ssh as SshTransport): Promise<string> {
+    const result = await transport.exec(
       `set -o pipefail; realpath -mz -- ${quoteShellArg(path)} | base64 -w0`,
       signal !== undefined ? { signal } : undefined,
     )
@@ -363,9 +385,9 @@ export class SshFileSystem extends FileSystem {
     return decodeCanonicalPath(result.stdout.trim())
   }
 
-  private async probe(path: string, displayPath: string, signal?: AbortSignal): Promise<Stats | undefined> {
+  private async probe(path: string, displayPath: string, signal?: AbortSignal, transport: SshTransport = this.ctx.ssh as SshTransport): Promise<Stats | undefined> {
     assertNotAborted(signal, 'stat')
-    const sftp = await this.ctx.ssh.getSftp()
+    const sftp = await transport.getSftp()
     try {
       const stats = await new Promise<Stats>((resolve, reject) => {
         sftp.stat(path, (error, value) => { if (error !== undefined) reject(error); else resolve(value) })
@@ -386,10 +408,11 @@ export class SshFileSystem extends FileSystem {
   }
 
   private async readBytesRaw(target: FsTarget, signal: AbortSignal | undefined, maxBytes: number): Promise<Uint8Array> {
-    const sftp = await this.ctx.ssh.getSftp()
+    const route = this.routeTarget(target)
+    const sftp = await route.transport.getSftp()
     try {
       const data = await new Promise<Buffer>((resolve, reject) => {
-        sftp.readFile(String(target.targetKey), (error, value) => { if (error !== undefined) reject(error); else resolve(value) })
+        sftp.readFile(route.path, (error, value) => { if (error !== undefined) reject(error); else resolve(value) })
       })
       assertNotAborted(signal, 'read')
       if (data.length > maxBytes) {
@@ -406,7 +429,7 @@ export class SshFileSystem extends FileSystem {
       throw new FsError(`cannot overwrite existing "${target.displayPath}" without reading it first`, 'FS_NOT_OBSERVED')
     }
     if (expected?.kind === 'replaceIfVersion') {
-      if (existing === undefined || entryVersion(existing, String(target.targetKey)) !== expected.version) {
+      if (existing === undefined || entryVersion(existing, this.pathOf(target)) !== expected.version) {
         throw new FsError(`cannot write "${target.displayPath}": file changed since it was read`, 'FS_STALE_VERSION')
       }
     }
@@ -433,12 +456,13 @@ export class SshFileSystem extends FileSystem {
     signal?: AbortSignal,
   ): Promise<ReturnType<typeof FsVersion>> {
     assertNotAborted(signal, 'write')
-    const targetPath = String(target.targetKey)
+    const route = this.routeTarget(target)
+    const targetPath = route.path
     const stagingDirectory = posix.join(posix.dirname(targetPath), `.dsh-${randomUUID()}.tmp`)
     const temporary = posix.join(stagingDirectory, 'content')
     let stagingCreated = false
     try {
-      const sftp = await this.ctx.ssh.getSftp()
+      const sftp = await route.transport.getSftp()
       await new Promise<void>((resolve, reject) => {
         sftp.mkdir(stagingDirectory, error => { if (error !== undefined) reject(error); else resolve() })
       })
@@ -448,10 +472,10 @@ export class SshFileSystem extends FileSystem {
       })
       assertNotAborted(signal, 'write')
       const mode = existing === undefined ? 0o600 : existing.mode & 0o777
-      await this.ctx.ssh.exec(`chmod ${mode.toString(8)} -- ${quoteShellArg(temporary)}`, signal !== undefined ? { signal } : undefined)
+      await route.transport.exec(`chmod ${mode.toString(8)} -- ${quoteShellArg(temporary)}`, signal !== undefined ? { signal } : undefined)
       assertNotAborted(signal, 'write')
       if (createIfAbsent) {
-        const publication = await this.ctx.ssh.exec(
+        const publication = await route.transport.exec(
           `if ln -T -- ${quoteShellArg(temporary)} ${quoteShellArg(targetPath)}; then printf created; elif test -e ${quoteShellArg(targetPath)} || test -L ${quoteShellArg(targetPath)}; then printf exists; else exit 1; fi`,
           signal !== undefined ? { signal } : undefined,
         )
@@ -465,18 +489,18 @@ export class SshFileSystem extends FileSystem {
         })
       }
       assertNotAborted(signal, 'write')
-      await this.removeStaging(stagingDirectory)
-      const committed = await this.probe(targetPath, target.displayPath, signal)
+      await this.removeStaging(stagingDirectory, route.transport)
+      const committed = await this.probe(targetPath, target.displayPath, signal, route.transport)
       if (committed === undefined) throw new FsError(`cannot write "${target.displayPath}": commit produced no file`, 'FS_IO_ERROR')
       return entryVersion(committed, targetPath)
     } catch (error: unknown) {
-      if (stagingCreated) await this.removeStaging(stagingDirectory)
+      if (stagingCreated) await this.removeStaging(stagingDirectory, route.transport)
       throw mapError(error, 'write', target.displayPath, signal)
     }
   }
 
-  private async removeStaging(directory: string): Promise<void> {
-    const sftp = await this.ctx.ssh.getSftp()
+  private async removeStaging(directory: string, transport: SshTransport = this.ctx.ssh as SshTransport): Promise<void> {
+    const sftp = await transport.getSftp()
     try {
       await new Promise<void>((resolve, reject) => {
         sftp.rmdir(directory, error => { if (error !== undefined) reject(error); else resolve() })

@@ -12,7 +12,7 @@ import type {
   SubprocessSpawnSpec,
 } from '@deepseek-ai/dsh-subprocess'
 import { quoteShellArg } from './runtime.ts'
-import type SshRuntime from './runtime.ts'
+import type { SshTransport } from './transport.ts'
 import { readRemoteEnvironment, scrubRemoteEnvironment, serializeEnvironment } from './environment.ts'
 import { SshOutputCollector } from './output.ts'
 
@@ -31,15 +31,16 @@ function normalizeSignal(signal: string | null | undefined): NodeJS.Signals | nu
  * the environment with the scrubbed remote base plus explicit entries and exec
  * the argv. `env -i` prevents credential-shaped remote names from leaking into
  * the child; the scrubbed base restores PATH and HOME.
- * @param ssh - shared SSH connection owner.
+ * @param ssh - connection owner backing this execution world.
+ * @param cwd - resolved absolute remote working directory.
  * @param spec - fully resolved subprocess request.
  * @returns the remote command text.
  */
-async function buildCommand(ssh: SshRuntime, spec: SubprocessSpawnSpec): Promise<string> {
+async function buildCommand(ssh: SshTransport, cwd: string, spec: SubprocessSpawnSpec): Promise<string> {
   const remote = await readRemoteEnvironment(ssh)
   const environment = serializeEnvironment(scrubRemoteEnvironment(remote), spec.env)
   const argv = spec.argv.map(quoteShellArg).join(' ')
-  return `cd -- ${quoteShellArg(ssh.resolveRemoteCwd(spec.cwd))} && exec env -i -- ${environment} ${argv}`
+  return `cd -- ${quoteShellArg(cwd)} && exec env -i -- ${environment} ${argv}`
 }
 
 /** SSH-backed subprocess handle. The channel does not expose a remote pid, so `pid` is `-1`. */
@@ -59,12 +60,14 @@ export class SshSubprocessHandle implements SubprocessHandle {
 
   /**
    * Start the SSH command without blocking the synchronous spawn call.
-   * @param runtime - shared SSH connection owner.
+   * @param runtime - connection owner backing this execution world.
+   * @param cwd - resolved absolute remote working directory.
    * @param spec - fully resolved subprocess request.
    * @param spillDir - local spill directory for collect-mode streams.
    */
   constructor(
-    private readonly runtime: SshRuntime,
+    private readonly runtime: SshTransport,
+    private readonly cwd: string,
     private readonly spec: SubprocessSpawnSpec,
     private readonly spillDir: string,
   ) {
@@ -148,7 +151,7 @@ export class SshSubprocessHandle implements SubprocessHandle {
   private async run(): Promise<SubprocessOutcome> {
     let channel: ClientChannel
     try {
-      const command = await buildCommand(this.runtime, this.spec)
+      const command = await buildCommand(this.runtime, this.cwd, this.spec)
       const client = await this.runtime.getClient()
       channel = await new Promise<ClientChannel>((resolve, reject) => {
         client.exec(command, { pty: false }, (error, stream) => {
