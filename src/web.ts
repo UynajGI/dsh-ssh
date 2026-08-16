@@ -6,13 +6,16 @@
  * @module dsh-ssh/web
  */
 
+import { mkdir, rm } from 'node:fs/promises'
 import { posix } from 'node:path'
 import type { SFTPWrapper, Stats } from 'ssh2'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { pickNativeDirectory } from '@deepseek-ai/dsh-host-directory-picker-native'
 import SshRegistry from './registry.ts'
 import type { ConnectionInput, RegistryConfig } from './registry.ts'
 import type { SshConnection } from './connection.ts'
+import { sshRoutePlaceholder } from './transport.ts'
 
 /** Channel config. */
 export interface WebChannelConfig extends RegistryConfig {
@@ -94,6 +97,12 @@ function isBrowsePayload(value: unknown): value is { id: string; path?: string }
     && (value.path === undefined || isString(value.path))
 }
 
+/** Session-route payload: `{ id, path }` with an absolute POSIX remote path. */
+function isSessionRoutePayload(value: unknown): value is { id: string; path: string } {
+  return isRecord(value) && isString(value.id) && value.id.trim() !== ''
+    && isString(value.path) && posix.isAbsolute(value.path)
+}
+
 /** Connection input payload (subset keys, all strings/numbers/arrays). */
 function isConnectionInput(value: unknown): value is ConnectionInput {
   if (!isRecord(value)) return false
@@ -116,8 +125,18 @@ function isConnectionInput(value: unknown): value is ConnectionInput {
   return true
 }
 
-const wireError = (code: string, message: string): { ok: false; error: { code: string; message: string } } =>
-  ({ ok: false, error: { code, message } })
+/**
+ * Map a channel failure onto the HOST's closed rpc error vocabulary — the
+ * client transport validates `code` against its discriminated union and
+ * per-code `details` shapes, so an off-vocabulary code surfaces as a raw zod
+ * dump instead of the business message.
+ */
+const wireError = (code: string, message: string): ChannelResult => {
+  if (code === 'bad-request') {
+    return { ok: false, error: { code, message, details: { issues: [] } } }
+  }
+  return { ok: false, error: { code: 'internal', message, details: {} } }
+}
 
 /** Ancestor chain from the remote root to `target` inclusive. */
 function ancestryCrumbs(target: string): WireEntry[] {
@@ -256,7 +275,14 @@ export function apply(ctx: Context, config: WebChannelConfig): void {
         }
         case 'connections.remove': {
           const input = requirePayload(payload, isIdPayload, 'connections.remove')
-          return { ok: true, value: { removed: registry().remove(input.id.trim()) } }
+          const removed = registry().remove(input.id.trim())
+          if (removed) {
+            // Drop the connection's local route placeholders; stale ones would
+            // route to a dead registry id on the next session resume.
+            void rm(sshRoutePlaceholder(input.id.trim(), '/'), { recursive: true, force: true })
+              .catch(() => undefined)
+          }
+          return { ok: true, value: { removed } }
         }
         case 'connections.test': {
           const input = requirePayload(payload, isConnectionInput, 'connections.test')
@@ -278,6 +304,24 @@ export function apply(ctx: Context, config: WebChannelConfig): void {
           }
           const created = await createRemoteDirectory(input.id.trim(), input.path, input.name, signal)
           return { ok: true, value: { path: created } }
+        }
+        case 'session.route': {
+          // The host's session service `mkdir`s the project directory through
+          // `node:fs`, so an `ssh://` cwd can never pass; hand the client a
+          // LOCAL placeholder instead, which both sides translate back into
+          // the registry route (see transport.ts).
+          const input = requirePayload(payload, isSessionRoutePayload, 'session.route')
+          requireConnection(input.id.trim())
+          const placeholder = sshRoutePlaceholder(input.id.trim(), input.path)
+          await mkdir(placeholder, { recursive: true })
+          return { ok: true, value: { cwd: placeholder } }
+        }
+        case 'local.pickNative': {
+          // One OS folder chooser on the host display — faster than walking
+          // the browse list for local workspaces. Null means the operator
+          // cancelled.
+          const path = await pickNativeDirectory(signal)
+          return { ok: true, value: { path } }
         }
         default:
           throw new Error(`bad-request: unknown endpoint ${JSON.stringify(endpoint)}`)

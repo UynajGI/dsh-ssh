@@ -59,7 +59,7 @@ npm i dsh-ssh
         privateKey: ~/.ssh/id_ed25519
       # - host: 第二级跳板 ...
     # --- 连接与安全 ---
-    readyTimeout: 20000        # 等价 ConnectTimeout（毫秒，默认 20s）
+    readyTimeout: 45000        # 等价 ConnectTimeout（毫秒，默认 45s，中继链路常见慢握手）
     keepaliveInterval: 0       # 等价 ServerAliveInterval（毫秒，0 禁用）
     keepaliveCountMax: 3       # 等价 ServerAliveCountMax
     strictHostKeyChecking: false   # true 时校验主机指纹
@@ -85,7 +85,9 @@ Web 界面的**添加工作区**流程（对话首屏的工作区选择器、侧
 Remote Explorer 式）：侧栏依次列出「SSH 配置主机」「已保存连接」和「本机目录」，
 右侧是与当前选中目标对应的目录浏览器。本机列表继续走 `ctx.directoryPicker`
 的 `browse` 能力；远程列表、连接管理与远程目录浏览走 dsh-ssh 自己的
-`/dsh-ssh` RPC 通道。
+`/dsh-ssh` RPC 通道。浏览本机时，工具栏还有「**系统选择器**」按钮（`local.pickNative`
+端点，复用宿主的 OS 原生文件夹对话框）——弹窗里选中的目录直接成为工作区，
+不必在列表里逐层点开。
 
 ### `~/.ssh/config` 主机直达（`config.hosts`）
 
@@ -107,15 +109,21 @@ Remote Explorer 式）：侧栏依次列出「SSH 配置主机」「已保存连
 粘贴时自动解析预填（「识别 ssh 配置」按钮保留为兜底），解析成功后表单内会
 显示一行摘要（别名 → user@host:port、私钥路径、跳板链）。
 
-选中远程目录后，客户端直接创建会话：
+选中远程目录后，客户端先经 `/dsh-ssh` 的 `session.route` 拿到一个**本地占位
+目录**（`<DSH_HOME>/dsh-ssh-routes/<连接id>/<远程路径>`，宿主侧自动创建），
+再用它创建会话：
 
 ```ts
-ctx.sessions.create({ cwd: `ssh://${connectionId}${remotePath}` })
+const { cwd } = await rpc('session.route', { id: connectionId, path: remotePath })
+ctx.sessions.create({ cwd })
 ```
 
-`ctx.subprocess` 与 `ctx.fs` 识别 `ssh://<id>/<path>` cwd，并把该会话的
-bash / 文件 / 终端操作路由到对应注册连接的对应目录。`ssh://` 目前不会写入
-DSH 本地 workspace 注册表（见「已知限制」）。
+之所以绕这一步：宿主的 session 服务会用 `node:fs` 对项目目录做本地
+`mkdir`，`ssh://…` 形式的 cwd 过不了这一关；而 `mkdir` 对已存在的目录静默
+成功。`ctx.subprocess` 与 `ctx.fs` 同时识别 `ssh://<id>/<path>` 与这个本地
+占位前缀，把该会话的 bash / 文件 / 终端操作路由到对应注册连接的对应目录。
+远程会话不会写入 DSH 本地 workspace 注册表（见「已知限制」）；删除连接时会
+一并清掉它的占位目录树。
 
 挂载三行：聚合 provider 行 + 本机/远程目录 browse 后端 + 连接注册表与 RPC
 通道。补丁层的 `name` 是**校验字段**（名字对不上会跳过整条补丁，不是替换），
@@ -173,7 +181,7 @@ DSH 本地 workspace 注册表（见「已知限制」）。
 | `agent` | string | — | ssh-agent socket 路径或 `pageant` |
 | `jump` | JumpConfig[] | `[]` | 跳板链，每级可独立配 port/username/认证 |
 | `cwd` | string | — | 远程工作目录（必填，绝对 POSIX 路径） |
-| `readyTimeout` | number | 20000 | 连接超时（毫秒） |
+| `readyTimeout` | number | 45000 | 连接超时（毫秒） |
 | `keepaliveInterval` | number | 0 | SSH 层保活间隔（毫秒） |
 | `keepaliveCountMax` | number | 3 | 保活失败判定次数 |
 | `strictHostKeyChecking` | boolean | false | 是否校验主机指纹 |
@@ -198,7 +206,7 @@ DSH 本地 workspace 注册表（见「已知限制」）。
 | 能力 | 实现 |
 |---|---|
 | 跳板链 | `jump` 数组，多级跳板（direct-tcpip，等价 OpenSSH `ProxyJump`），每级独立认证 |
-| 认证 | 密码、私钥（PEM 内容或路径）、passphrase、ssh-agent / Pageant |
+| 认证 | 密码、私钥（PEM 内容或路径）、passphrase、ssh-agent / Pageant；全部未配置时回退 `~/.ssh` 默认私钥（id_ed25519 / id_ecdsa / id_rsa，等价 OpenSSH 行为） |
 | 近端上传 | SFTP 原子写（同目录临时文件 + rename，保留原 mode） |
 | 远端下载 | fs provider 全套：read / streamText（流式解码）/ readBytes（限量）/ listDir / stat / lstat |
 | 远程命令 | subprocess provider：collect（tail 保留 + 本地 spill 文件）、pipe、inherit、批量 stdin |
@@ -239,7 +247,7 @@ DSH 本地 workspace 注册表（见「已知限制」）。
 - **终止不保证进程树**：`terminate` 通过 channel 信号（SIGTERM → grace → SIGKILL）作用于远程直接进程，不保证覆盖其子进程树（SSH 协议固有，与本地 provider 的进程组语义有差距）。
 - **终端前台进程组**：`inspectForeground` 返回 `undefined`，`signalForeground` 不可用（SSH channel 无法解析远端前台进程组）。
 - **单连接不重连**：连接断开后需重启插件。
-- **远程目录以会话落地**：多连接界面选中远程目录后通过 `session.create({ cwd: 'ssh://<id>/<path>' })` 打开远程会话；它不会在 DSH 的本地 workspace 注册表里创建 workspace 记录（`dsh-workspace` 仍只接受本地 `fs.realpath` 目录）。
+- **远程目录以会话落地**：多连接界面选中远程目录后，经 `session.route` 取本地占位目录并 `session.create({ cwd })` 打开远程会话（占位目录形如 `<DSH_HOME>/dsh-ssh-routes/<id>/<path>`，会话列表里 cwd 显示的就是它）；它不会在 DSH 的本地 workspace 注册表里创建 workspace 记录（`dsh-workspace` 仍只接受本地 `fs.realpath` 目录）。
 - **POSIX 主机上选择器仅远程**：任何绝对路径都是远程路径，本机文件系统无法与远程共用选择器（Windows 主机通过盘符/UNC 路由两者共存）。
 - **`streamText` 仅文本**：二进制文件抛 `FS_NOT_TEXT`（与官方 provider 一致）。
 

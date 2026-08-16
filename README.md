@@ -59,7 +59,7 @@ npm i dsh-ssh
         privateKey: ~/.ssh/id_ed25519
       # - host: second-hop ...
     # --- Connection & security ---
-    readyTimeout: 20000        # ~ ConnectTimeout (ms, default 20s)
+    readyTimeout: 45000        # ~ ConnectTimeout (ms, default 45s; relayed links handshake slowly)
     keepaliveInterval: 0       # ~ ServerAliveInterval (0 disables)
     keepaliveCountMax: 3       # ~ ServerAliveCountMax
     strictHostKeyChecking: false   # verify the host key when true
@@ -86,7 +86,11 @@ sidebar workspace browser) is taken over by the dsh-ssh client UI, laid out as a
 style): the sidebar lists `~/.ssh/config` hosts, saved connections, and the
 local entry; the right pane browses whichever side is active. Local listing
 rides the `ctx.directoryPicker` `browse` capability; connection management and
-remote listing ride dsh-ssh's own `/dsh-ssh` RPC channel.
+remote listing ride dsh-ssh's own `/dsh-ssh` RPC channel. While browsing the
+local side, the toolbar also offers a **system chooser** button (the
+`local.pickNative` endpoint, reusing the host's OS-native folder dialog) — the
+directory picked in the popup becomes the workspace directly, no
+level-by-level walking required.
 
 ### `~/.ssh/config` hosts in the sidebar (`config.hosts`)
 
@@ -143,16 +147,23 @@ backend inserted under its own id. In the Web profile
         maxEntries: 1000
 ```
 
-Picking a remote directory creates a session directly:
+Picking a remote directory first asks `/dsh-ssh` `session.route` for a LOCAL
+placeholder directory (`<DSH_HOME>/dsh-ssh-routes/<connectionId>/<remotePath>`,
+created host-side) and creates the session with it:
 
 ```ts
-ctx.sessions.create({ cwd: `ssh://${connectionId}${remotePath}` })
+const { cwd } = await rpc('session.route', { id: connectionId, path: remotePath })
+ctx.sessions.create({ cwd })
 ```
 
-`ctx.subprocess` and `ctx.fs` recognize `ssh://<id>/<path>` cwds and route that
-session's bash / file / terminal operations onto the registered connection's
-directory. The `ssh://` spelling does not enter the DSH local workspace registry
-(see「Known limitations」).
+The detour exists because the host's session service `mkdir`s the project
+directory through `node:fs` — an `ssh://…` cwd cannot pass that check, while
+`mkdir` succeeds silently for an existing directory. `ctx.subprocess` and
+`ctx.fs` recognize both the `ssh://<id>/<path>` spelling and the local
+placeholder prefix, routing that session's bash / file / terminal operations
+onto the registered connection's directory. Remote sessions do not enter the
+DSH local workspace registry (see「Known limitations」); deleting a connection
+also removes its placeholder tree.
 
 ### Picker configuration (`dsh-ssh/picker`)
 
@@ -179,7 +190,7 @@ remote directory browsing ride the `dsh-ssh/web` RPC channel instead.
 | `agent` | string | — | ssh-agent socket path or `pageant` |
 | `jump` | JumpConfig[] | `[]` | ProxyJump chain; per-hop port/user/auth overrides |
 | `cwd` | string | — | Remote working directory (required, absolute POSIX path) |
-| `readyTimeout` | number | 20000 | Connection timeout (ms) |
+| `readyTimeout` | number | 45000 | Connection timeout (ms) |
 | `keepaliveInterval` | number | 0 | SSH keepalive interval (ms) |
 | `keepaliveCountMax` | number | 3 | Keepalive failure threshold |
 | `strictHostKeyChecking` | boolean | false | Verify the host key against `knownHosts` |
@@ -204,7 +215,7 @@ remote directory browsing ride the `dsh-ssh/web` RPC channel instead.
 | Capability | Implementation |
 |---|---|
 | ProxyJump chains | `jump` array, multi-hop (direct-tcpip, equivalent to OpenSSH `ProxyJump`), independent auth per hop |
-| Auth | password, private key (PEM or path), passphrase, ssh-agent / Pageant |
+| Auth | password, private key (PEM or path), passphrase, ssh-agent / Pageant; with none configured, falls back to the `~/.ssh` default identities (id_ed25519 / id_ecdsa / id_rsa, mirroring OpenSSH) |
 | Upload (local → remote) | SFTP atomic write (same-dir temp file + rename, mode preserved) |
 | Download (remote → local) | full fs provider: read / streamText (streaming decode) / readBytes (bounded) / listDir / stat / lstat |
 | Remote commands | subprocess provider: collect (bounded tail + local spill file), pipe, inherit, batch stdin |
@@ -245,6 +256,7 @@ remote directory browsing ride the `dsh-ssh/web` RPC channel instead.
 - **Termination is not tree-scoped** — `terminate` signals the remote direct process (SIGTERM → grace → SIGKILL); descendants are not guaranteed to die (inherent to the SSH protocol, unlike the local provider's process groups).
 - **No foreground process group** — `inspectForeground` returns `undefined` and `signalForeground` throws (the SSH channel cannot resolve a remote foreground group).
 - **No reconnection** — a dropped connection requires a plugin restart.
+- **Remote directories land as sessions** — picking a remote directory opens a session through a `session.route` local placeholder (`<DSH_HOME>/dsh-ssh-routes/<id>/<path>`; the session list shows that cwd); no record is created in the DSH local workspace registry (`dsh-workspace` still only accepts local `fs.realpath` directories).
 - **Picker is remote-only on POSIX hosts** — every absolute path is a remote path there, so the local filesystem cannot share the picker's vocabulary (Windows hosts keep both worlds via drive/UNC routing).
 - **Text-only streaming** — `streamText` rejects binary files with `FS_NOT_TEXT` (same as the official provider).
 

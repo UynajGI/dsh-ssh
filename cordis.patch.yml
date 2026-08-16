@@ -1,0 +1,39 @@
+# The dsh-ssh bundle patch: SSH remote development over the dsh-web-app layer.
+#
+# Rows here are overridden by the profile's own cordis.patch.yml and any
+# --patch overlays, so a deployment can retune or disable any of them.
+#
+# - The aggregate `ssh-remote` row mounts ctx.ssh / ctx.subprocess / ctx.fs and
+#   makes the client bundle scannable. Its connection is a placeholder: nothing
+#   connects lazily — real remote work happens on registry connections created
+#   in the web UI and persisted to ~/.dsh/dsh-ssh-connections.json.
+# - The default host directory picker is disabled because dsh-ssh's client UI
+#   (sidebar + browser, plus the native system chooser) takes over the whole
+#   add-workspace flow.
+
+# 关闭默认 -auto picker（它动态挂载的界面随行一起消失）
+- id: directory-picker
+  name: '@deepseek-ai/dsh-host-directory-picker-auto'
+  disabled: true
+
+- insert:
+    # ctx.ssh / ctx.subprocess / ctx.fs 三个远程 provider（占位连接，懒建立）
+    - id: ssh-remote
+      name: dsh-ssh
+      config:
+        host: 127.0.0.1
+        port: 22
+        username: ssh
+        cwd: /tmp
+
+    # 本机/远程目录 browse 后端
+    - id: directory-picker-ssh
+      name: dsh-ssh/picker
+      config:
+        maxEntries: 1000
+
+    # 多连接注册表 + /dsh-ssh RPC（持久化、连接管理、远程目录浏览）
+    - id: ssh-web-channel
+      name: dsh-ssh/web
+      config:
+        maxEntries: 1000

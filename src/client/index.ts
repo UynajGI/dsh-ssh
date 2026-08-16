@@ -57,12 +57,6 @@ export interface ClientWorkspaces {
   createDirectory(path: string, name: string): Promise<string>
 }
 
-/** The client sessions service's remote-open face. */
-export interface ClientSessions {
-  create(opts: { workspaceId?: string; cwd?: string; sessionId?: string }): Promise<string>
-  open(sessionId: string): void
-}
-
 /** The client connection handle's RPC face. */
 export interface ClientConnection {
   rpc: {
@@ -77,16 +71,11 @@ declare module '@deepseek-ai/cordis' {
       register(options: { name: string; inject?: (...args: never[]) => Record<string, unknown> }, component: unknown): () => void
     }
     workspaces: ClientWorkspaces
-    // NOTE: `sessions` is deliberately NOT redeclared here. The installed
-    // node-side `@deepseek-ai/dsh-session` already augments Context with
-    // `sessions: SessionStore`; the browser bundle's sessions service has the
-    // client face below, so apply() narrows through a local cast instead of
-    // a second, conflicting augmentation.
   }
 }
 
 /** Required client services: the slot registry and the wire-facing workspace service. */
-export const inject = ['slots', 'workspaces', 'sessions']
+export const inject = ['slots', 'workspaces']
 
 /**
  * Client plugin body: fill both directory-flow holes with the SSH workspace
@@ -95,15 +84,9 @@ export const inject = ['slots', 'workspaces', 'sessions']
  * @param ctx - client root context.
  */
 export function apply(ctx: Context): void {
-  // The browser bundle's sessions service (client face of the node SessionStore).
-  const sessions = ctx.sessions as unknown as ClientSessions
   const injected = (): Record<string, unknown> => ({
     listLocalDirectory: (path?: string, signal?: AbortSignal) => ctx.workspaces.listDirectory(path, signal),
     createLocalDirectory: (path: string, name: string) => ctx.workspaces.createDirectory(path, name),
-      openRemoteSession: async (cwd: string) => {
-        const sessionId = await sessions.create({ cwd })
-        sessions.open(sessionId)
-      },
     rpc: (endpoint: string, payload?: unknown, signal?: AbortSignal) => {
       const connection = ctx.get('connection') as ClientConnection | undefined
       if (connection === undefined) {

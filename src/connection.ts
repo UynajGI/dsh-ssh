@@ -14,7 +14,7 @@ import { homedir } from 'node:os'
 import { join, posix } from 'node:path'
 import { Client } from 'ssh2'
 import type { ClientChannel, ConnectConfig, SFTPWrapper } from 'ssh2'
-import { wrapCwd } from './runtime.ts'
+import { wrapCwd, defaultIdentity } from './runtime.ts'
 import type { ExecOutcome, JumpConfig } from './runtime.ts'
 
 /** One hop after auth and defaults are resolved. */
@@ -69,6 +69,18 @@ function readIdentityFile(path: string): string {
   return readFileSync(expanded, 'utf8')
 }
 
+/**
+ * ssh2 failures carry transport `code`s (ECONNREFUSED, CLIENT_AUTH…) that host
+ * services forward verbatim and their closed wire vocabularies then reject;
+ * rewrap into a bare Error so consumers fall back to their own mapping. Abort
+ * reasons and our own messages pass through untouched.
+ */
+function rewrapConnectError(error: unknown, label: string, endpoint: string): unknown {
+  if (!(error instanceof Error)) return error
+  if (error.name === 'AbortError' || error.message.startsWith('dsh-ssh:')) return error
+  return new Error(`dsh-ssh: cannot connect to "${label}" (${endpoint}): ${error.message}`)
+}
+
 /** Build the ssh2 config for one hop, without the jump socket. */
 function toConnectConfig(hop: ResolvedHop, agentFallback: string | undefined): ConnectConfig {
   const config: ConnectConfig = {
@@ -84,6 +96,10 @@ function toConnectConfig(hop: ResolvedHop, agentFallback: string | undefined): C
   if (hop.passphrase !== undefined) config.passphrase = hop.passphrase
   if (hop.agent !== undefined) config.agent = hop.agent
   else if (agentFallback !== undefined) config.agent = agentFallback
+  if (config.password === undefined && config.privateKey === undefined && config.agent === undefined) {
+    const identity = defaultIdentity()
+    if (identity !== undefined) config.privateKey = identity
+  }
   return config
 }
 
@@ -152,7 +168,9 @@ export class SshConnection {
     this.endpoint = `${spec.username}@${spec.host}`
     this.strict = false
     this.knownHosts = []
-    const readyTimeout = spec.readyTimeout ?? 20_000
+    // Tailscale/DERP-relayed paths routinely exceed 20s to ready (observed
+    // 4–20s variance); OpenSSH has no client-side handshake cap at all.
+    const readyTimeout = spec.readyTimeout ?? 45_000
     const keepaliveInterval = spec.keepaliveInterval ?? 0
     const keepaliveCountMax = spec.keepaliveCountMax ?? 3
     const parent: ResolvedHop = {
@@ -222,7 +240,12 @@ export class SshConnection {
     signal?.throwIfAborted()
     if (this.disposed) throw new Error(`dsh-ssh: connection "${this.label}" is disposed`)
     this.ready ??= this.open()
-    const client = await this.ready
+    let client: Client
+    try {
+      client = await this.ready
+    } catch (error) {
+      throw rewrapConnectError(error, this.label, this.endpoint)
+    }
     signal?.throwIfAborted()
     if (this.disposed) throw new Error(`dsh-ssh: connection "${this.label}" is disposed`)
     return client

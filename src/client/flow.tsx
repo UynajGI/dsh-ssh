@@ -38,7 +38,6 @@ import styles from './flow.module.css'
 export interface FlowInjected {
   listLocalDirectory(path?: string, signal?: AbortSignal): Promise<WireListing>
   createLocalDirectory(path: string, name: string): Promise<string>
-  openRemoteSession(cwd: string): Promise<void>
   rpc(endpoint: string, payload?: unknown, signal?: AbortSignal): Promise<WireResult>
 }
 
@@ -155,6 +154,13 @@ function asAddedView(value: unknown): ConnectionView {
  * methods failed` — that one gets the auth-completion guidance.
  */
 function describeRemoteFailure(raw: string): RemoteFailure {
+  if (/invalid_union/.test(raw)) {
+    return {
+      title: '无法创建远程会话',
+      text: '宿主返回了无法解析的错误响应——最常见的原因是 SSH 连接失败。请检查该主机的认证与网络配置后重试。',
+      needsAuth: false,
+    }
+  }
   if (/all configured authentication methods/i.test(raw)) {
     return {
       title: '认证失败',
@@ -186,7 +192,7 @@ function describeRemoteFailure(raw: string): RemoteFailure {
 
 /** The directory-flow occupant registered into both workspace holes. */
 export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
-  const { open, busy, onPicked, onCancel, listLocalDirectory, createLocalDirectory, openRemoteSession, rpc } = props
+  const { open, busy, onPicked, onCancel, listLocalDirectory, createLocalDirectory, rpc } = props
 
   const [mode, setMode] = useState<Mode>({ kind: 'local' })
   const [pane, setPane] = useState<Pane>(EMPTY_PANE)
@@ -198,6 +204,7 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
   const [configError, setConfigError] = useState<string | null>(null)
   const [hostPending, setHostPending] = useState<string | null>(null)
   const [hostError, setHostError] = useState<{ alias: string; message: string } | null>(null)
+  const [confirmTarget, setConfirmTarget] = useState<{ host: ConfigHostView; resolved: ResolvedSshConfigView } | null>(null)
   const [formOpen, setFormOpen] = useState(false)
   const [formDraft, setFormDraft] = useState<ConnectionDraft | undefined>(undefined)
   const [folderDraft, setFolderDraft] = useState<string | null>(null)
@@ -205,6 +212,7 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
   const [folderBusy, setFolderBusy] = useState(false)
   const [folderError, setFolderError] = useState<string | null>(null)
   const [showHidden, setShowHidden] = useState(false)
+  const [nativePicking, setNativePicking] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<ConnectionView | null>(null)
   const [removingId, setRemovingId] = useState<string | null>(null)
 
@@ -220,6 +228,7 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
   const dialogRef = useDialogA11y(open, () => { onCancel() })
   const folderDialogRef = useDialogA11y(folderDraft !== null, () => { if (!folderBusy) setFolderDraft(null) })
   const deleteDialogRef = useDialogA11y(deleteTarget !== null, () => { if (removingId === null) setDeleteTarget(null) })
+  const confirmDialogRef = useDialogA11y(confirmTarget !== null, () => { if (hostPending === null) setConfirmTarget(null) })
 
   /** List one level, guarding against superseded/closed generations. */
   const loadLevel = async (request: (signal: AbortSignal) => Promise<WireListing>): Promise<void> => {
@@ -251,8 +260,16 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
     if (mode.kind !== 'remote' || pane.path === null || openingRemote) return
     setOpeningRemote(true)
     try {
-      await openRemoteSession(`ssh://${mode.id}${pane.path}`)
-      onCancel()
+      // The host mkdir's the session cwd locally, so hand it the local
+      // placeholder that stands in for the remote route (both spellings
+      // resolve to the same registry connection in the providers). Adopt it
+      // through the host's own pick flow: the session gets a workspaceId
+      // (the web hero gates cwd-only sessions), and the placeholder routes
+      // every bash/fs/terminal operation onto the remote host.
+      const routed = unwrap(await rpc('session.route', { id: mode.id, path: pane.path }), 'session.route failed')
+      const cwd = isRecord(routed) && typeof routed.cwd === 'string' ? routed.cwd : ''
+      if (cwd === '') throw new Error('session.route 未返回会话目录')
+      onPicked(cwd)
     } catch (error) {
       setPane(previous => ({ ...previous, error: error instanceof Error ? error.message : String(error) }))
     } finally {
@@ -323,6 +340,8 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
     setRemovingId(null)
     setHostPending(null)
     setHostError(null)
+    setConfirmTarget(null)
+    setNativePicking(false)
     setMode({ kind: 'local' })
     void refreshConnections()
     void refreshConfigHosts()
@@ -339,6 +358,21 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
     else navigateRemote(modeRef.current.id, paneRef.current.path ?? undefined)
   }
 
+  /** One OS folder chooser on the host display; a pick lands straight as the workspace. */
+  const pickNative = async (): Promise<void> => {
+    if (mode.kind !== 'local' || nativePicking) return
+    setNativePicking(true)
+    try {
+      const result = unwrap(await rpc('local.pickNative'), 'local.pickNative failed')
+      const path = isRecord(result) && typeof result.path === 'string' ? result.path : ''
+      if (path !== '') onPicked(path)
+    } catch (error) {
+      setPane(previous => ({ ...previous, error: error instanceof Error ? error.message : String(error) }))
+    } finally {
+      setNativePicking(false)
+    }
+  }
+
   /** The registry entry a config alias points at, if it was registered before. */
   const matchConfigHost = (host: ConfigHostView): ConnectionView | undefined =>
     connections.find(connection =>
@@ -353,9 +387,9 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
 
   /**
    * One click on a config host: switch to its registered entry when there is
-   * one, otherwise resolve the alias, register it silently, and browse its
-   * home right away (VS Code Remote-SSH style). A missing username routes to
-   * the prefilled form instead — the registry refuses empty usernames.
+   * one; otherwise resolve the alias first. A missing username routes to the
+   * prefilled form (the registry refuses empty usernames); anything else asks
+   * for confirmation before it is registered and browsed.
    */
   const activateConfigHost = async (host: ConfigHostView): Promise<void> => {
     if (hostPending !== null) return
@@ -382,6 +416,21 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
         })
         return
       }
+      setConfirmTarget({ host, resolved })
+    } catch (error) {
+      setHostError({ alias: host.alias, message: error instanceof Error ? error.message : String(error) })
+    } finally {
+      setHostPending(null)
+    }
+  }
+
+  /** Confirmed: register the config host and browse its home right away. */
+  const confirmAddHost = async (): Promise<void> => {
+    if (confirmTarget === null || hostPending !== null) return
+    const { host, resolved } = confirmTarget
+    setHostError(null)
+    setHostPending(host.alias)
+    try {
       const result = await rpc('connections.add', {
         label: host.alias,
         host: resolved.host,
@@ -392,10 +441,12 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
       })
       const view = asAddedView(unwrap(result, 'connections.add failed'))
       if (view.id === '') throw new Error('注册结果缺少连接 id')
+      setConfirmTarget(null)
       await refreshConnections(true)
       await refreshConfigHosts(true)
       navigateRemote(view.id)
     } catch (error) {
+      setConfirmTarget(null)
       setHostError({ alias: host.alias, message: error instanceof Error ? error.message : String(error) })
     } finally {
       setHostPending(null)
@@ -533,16 +584,6 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
               <h4 className={styles.sidebarTitle}>
                 已保存连接
                 {connections.length > 0 && <span className={styles.sidebarCount}>{connections.length}</span>}
-                <span className={styles.gap} />
-                <button
-                  type="button"
-                  className={styles.sidebarAdd}
-                  aria-label="新建连接"
-                  title="新建连接"
-                  onClick={() => { openForm() }}
-                >
-                  <PlusIcon style={{ width: 12, height: 12 }} />
-                </button>
               </h4>
 
               {connectionsLoading && (
@@ -573,7 +614,7 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
                 <div className={styles.sideEmpty}>
                   <ServerIcon className={styles.sideEmptyIcon} style={{ width: 18, height: 18 }} />
                   <p className={styles.sideEmptyTitle}>还没有保存的连接</p>
-                  <p className={styles.sideEmptyText}>点标题栏的「＋」新建，或从下方 SSH 配置主机一键添加。</p>
+                  <p className={styles.sideEmptyText}>点右下角「＋」新建，或从下方 SSH 配置主机一键添加。</p>
                 </div>
               )}
 
@@ -666,15 +707,14 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
                 <ul className={styles.connectionList} role="list">
                   {configHosts.map(host => {
                     const registered = matchConfigHost(host)
-                    const active = registered !== undefined && mode.kind === 'remote' && mode.id === registered.id
                     const working = hostPending === host.alias
                     const failed = hostError !== null && hostError.alias === host.alias
                     return (
-                      <li key={host.alias} className={cx(styles.connectionItem, active && styles.connectionItemActive)}>
+                      <li key={host.alias} className={styles.connectionItem}>
                         <button
                           type="button"
                           className={styles.connectionMain}
-                          aria-current={active ? 'true' : 'false'}
+                          aria-current="false"
                           disabled={hostPending !== null}
                           title={registered !== undefined
                             ? `已注册为 ${registered.username}@${registered.host}:${registered.port}`
@@ -732,6 +772,15 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
               )}
             </section>
 
+            <button
+              type="button"
+              className={styles.sidebarAdd}
+              aria-label="新建连接"
+              title="新建连接"
+              onClick={() => { openForm() }}
+            >
+              <PlusIcon style={{ width: 14, height: 14 }} />
+            </button>
           </nav>
 
           <div className={styles.main}>
@@ -771,8 +820,21 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
                   ),
                 )}
               </nav>
-              <div className={styles.toolbarActions}>
-                <button
+          <div className={styles.toolbarActions}>
+            {mode.kind === 'local' && (
+              <button
+                type="button"
+                className={cx(styles.toolButton, styles.toolButtonText)}
+                aria-label="用系统选择器选择文件夹"
+                title="打开系统文件夹选择器"
+                disabled={nativePicking || busy}
+                onClick={() => { void pickNative() }}
+              >
+                {nativePicking ? <SpinnerIcon className={styles.spin} /> : <FolderIcon style={{ width: 13, height: 13 }} />}
+                系统选择器
+              </button>
+            )}
+            <button
                   type="button"
                   className={styles.toolButton}
                   aria-label="在当前目录新建文件夹"
@@ -963,6 +1025,37 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
               >
                 {removingId !== null && <SpinnerIcon className={styles.spin} />}
                 删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmTarget !== null && (
+        <div className={styles.overlay} onClick={(event) => { if (event.target === event.currentTarget && hostPending === null) setConfirmTarget(null) }}>
+          <div className={styles.smallDialog} role="dialog" aria-modal="true" aria-label="添加 SSH 配置主机" ref={confirmDialogRef}>
+            <div className={styles.confirmHead}>
+              <span className={cx(styles.confirmIconWrap, styles.confirmIconInfo)}><ServerIcon /></span>
+              <div>
+                <h3 className={styles.formTitle}>添加连接「{confirmTarget.host.alias}」？</h3>
+                <p className={styles.confirmText}>
+                  将把 {confirmTarget.resolved.username}@{confirmTarget.resolved.host}:{confirmTarget.resolved.port}
+                  {confirmTarget.resolved.jump.length > 0 ? `（经 ${String(confirmTarget.resolved.jump.length)} 级跳板）` : ''}
+                  保存到「已保存连接」，并打开它的远程目录。
+                </p>
+              </div>
+            </div>
+            <div className={styles.formActions}>
+              <span className={styles.gap} />
+              <button type="button" className={styles.button} disabled={hostPending !== null} onClick={() => { setConfirmTarget(null) }}>取消</button>
+              <button
+                type="button"
+                className={cx(styles.button, styles.primary)}
+                disabled={hostPending !== null}
+                onClick={() => { void confirmAddHost() }}
+              >
+                {hostPending !== null && <SpinnerIcon className={styles.spin} />}
+                添加并连接
               </button>
             </div>
           </div>

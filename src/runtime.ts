@@ -8,8 +8,9 @@
  */
 
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { posix } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join, posix } from 'node:path'
 import { Client } from 'ssh2'
 import type { ClientChannel, ConnectConfig, SFTPWrapper } from 'ssh2'
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -170,6 +171,22 @@ function hostVerifierFor(knownHosts: readonly string[]): (key: Buffer) => boolea
   }
 }
 
+/** OpenSSH's default identity probe order, used when no auth is configured. */
+const DEFAULT_IDENTITY_FILES = ['.ssh/id_ed25519', '.ssh/id_ecdsa', '.ssh/id_rsa']
+
+/**
+ * The first existing OpenSSH default identity, mirroring the ssh client's own
+ * probe: a hop with no password, key, or agent configured would otherwise be
+ * rejected by every server because ssh2 never tries default key files.
+ */
+export function defaultIdentity(): string | undefined {
+  for (const candidate of DEFAULT_IDENTITY_FILES) {
+    const expanded = join(homedir(), candidate)
+    if (existsSync(expanded)) return readFileSync(expanded, 'utf8')
+  }
+  return undefined
+}
+
 /** Resolve auth and defaults into one connection hop. */
 function resolveHost(config: ResolvedConfig): ResolvedHost {
   const host: ResolvedHost = {
@@ -219,6 +236,10 @@ function toConnectConfig(host: ResolvedHost, strict: boolean, knownHosts: readon
   if (host.passphrase !== undefined) config.passphrase = host.passphrase
   if (host.agent !== undefined) config.agent = host.agent
   if (strict) config.hostVerifier = hostVerifierFor(knownHosts)
+  if (config.password === undefined && config.privateKey === undefined && config.agent === undefined) {
+    const identity = defaultIdentity()
+    if (identity !== undefined) config.privateKey = identity
+  }
   return config
 }
 
@@ -270,7 +291,7 @@ export class SshRuntime extends Service {
       keepaliveCountMax: z.number(),
     })).default([]),
     cwd: z.string().required(),
-    readyTimeout: z.number().default(20_000),
+    readyTimeout: z.number().default(45_000),
     keepaliveInterval: z.number().default(0),
     keepaliveCountMax: z.number().default(3),
     strictHostKeyChecking: z.boolean().default(false),
