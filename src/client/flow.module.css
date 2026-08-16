@@ -285,29 +285,6 @@
   min-width: 0;
 }
 
-.newConnection {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: 100%;
-  padding: 6px 10px;
-  border: 1px dashed var(--dshssh-border-strong);
-  border-radius: 7px;
-  background: transparent;
-  color: var(--dshssh-fg);
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.newConnection:hover {
-  border-style: solid;
-  border-color: var(--dshssh-accent);
-  background: var(--dshssh-accent-soft);
-  color: var(--dshssh-accent);
-}
-
 .sidebarSection {
   display: flex;
   flex-direction: column;
@@ -319,8 +296,24 @@
   border-top: 1px solid var(--dshssh-line);
 }
 
-.newConnection + .sidebarSection {
-  margin-top: 12px;
+.sidebarAdd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dshssh-fg-muted);
+  cursor: pointer;
+}
+
+.sidebarAdd:hover {
+  background: var(--dshssh-surface-3);
+  color: var(--dshssh-fg);
 }
 
 .sidebarTitle {
@@ -970,6 +963,11 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* Column context: fields size to content; the 180px basis belongs to rows. */
+.formGrid > .field {
+  flex: 0 0 auto;
 }
 
 .rowFields {

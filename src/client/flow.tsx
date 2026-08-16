@@ -508,10 +508,122 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
 
         <div className={styles.body}>
           <nav className={styles.sidebar} aria-label="连接与位置">
-            <button type="button" className={styles.newConnection} onClick={() => { openForm() }}>
-              <PlusIcon style={{ width: 12, height: 12 }} />
-              新建连接
-            </button>
+            <section className={styles.sidebarSection} aria-label="本机">
+              <ul className={styles.connectionList} role="list">
+                <li className={cx(styles.connectionItem, mode.kind === 'local' && styles.connectionItemActive)}>
+                  <button
+                    type="button"
+                    className={styles.connectionMain}
+                    aria-current={mode.kind === 'local' ? 'true' : 'false'}
+                    onClick={() => { if (mode.kind !== 'local') navigateLocal() }}
+                  >
+                    <MonitorIcon className={styles.connectionIcon} />
+                    <span className={styles.connectionInfo}>
+                      <span className={styles.connectionLabel}>本机目录</span>
+                      <span className={styles.connectionDetail}>
+                        <span className={styles.connectionEndpoint}>选择本机目录作为工作区</span>
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              </ul>
+            </section>
+
+            <section className={styles.sidebarSection} aria-label="已保存连接">
+              <h4 className={styles.sidebarTitle}>
+                已保存连接
+                {connections.length > 0 && <span className={styles.sidebarCount}>{connections.length}</span>}
+                <span className={styles.gap} />
+                <button
+                  type="button"
+                  className={styles.sidebarAdd}
+                  aria-label="新建连接"
+                  title="新建连接"
+                  onClick={() => { openForm() }}
+                >
+                  <PlusIcon style={{ width: 12, height: 12 }} />
+                </button>
+              </h4>
+
+              {connectionsLoading && (
+                <div role="status" aria-label="正在加载已保存连接">
+                  {[0, 1].map(index => (
+                    <div key={index} className={styles.skeletonRow}>
+                      <div className={styles.skeletonDot} />
+                      <div className={styles.skeletonLines}>
+                        <div className={styles.skeletonLine} style={{ width: '38%' }} />
+                        <div className={styles.skeletonLine} style={{ width: '62%' }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {connectionsError !== null && !connectionsLoading && (
+                <div className={styles.sideError} role="alert">
+                  <span className={styles.sideErrorText}>{connectionsError}</span>
+                  <button type="button" className={styles.retryButton} onClick={() => { void refreshConnections() }}>
+                    <RefreshIcon style={{ width: 12, height: 12 }} />
+                    重试
+                  </button>
+                </div>
+              )}
+
+              {!connectionsLoading && connectionsError === null && connections.length === 0 && (
+                <div className={styles.sideEmpty}>
+                  <ServerIcon className={styles.sideEmptyIcon} style={{ width: 18, height: 18 }} />
+                  <p className={styles.sideEmptyTitle}>还没有保存的连接</p>
+                  <p className={styles.sideEmptyText}>点标题栏的「＋」新建，或从下方 SSH 配置主机一键添加。</p>
+                </div>
+              )}
+
+              {!connectionsLoading && connections.length > 0 && (
+                <ul className={styles.connectionList} role="list">
+                  {connections.map(connection => {
+                    const active = mode.kind === 'remote' && mode.id === connection.id
+                    return (
+                      <li key={connection.id} className={cx(styles.connectionItem, active && styles.connectionItemActive)}>
+                        <button
+                          type="button"
+                          className={styles.connectionMain}
+                          aria-current={active ? 'true' : 'false'}
+                          onClick={() => { navigateRemote(connection.id) }}
+                        >
+                          <ServerIcon className={styles.connectionIcon} />
+                          <span className={styles.connectionInfo}>
+                            <span className={styles.connectionLabel}>{connection.label}</span>
+                            <span className={styles.connectionDetail}>
+                              <span className={styles.connectionEndpoint}>
+                                {connection.username}@{connection.host}:{connection.port}
+                              </span>
+                              <span className={styles.badge}>
+                                {connection.auth === 'password' ? <LockIcon style={{ width: 11, height: 11 }} /> : <KeyIcon style={{ width: 11, height: 11 }} />}
+                                {connection.auth === 'password' ? '密码' : connection.auth === 'agent' ? 'Agent' : '私钥'}
+                              </span>
+                              {connection.jumpHosts.length > 0 && (
+                                <span className={styles.badge} title={connection.jumpHosts.join(' → ')}>
+                                  <RouteIcon style={{ width: 11, height: 11 }} />
+                                  跳板 ×{connection.jumpHosts.length}
+                                </span>
+                              )}
+                            </span>
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.connectionRemove}
+                          aria-label={`删除连接 ${connection.label}`}
+                          title="删除连接"
+                          onClick={() => { setDeleteTarget(connection) }}
+                        >
+                          <TrashIcon style={{ width: 14, height: 14 }} />
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </section>
 
             <section className={styles.sidebarSection} aria-label="SSH 配置主机">
               <h4 className={styles.sidebarTitle}>
@@ -620,112 +732,6 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
               )}
             </section>
 
-            <section className={styles.sidebarSection} aria-label="已保存连接">
-              <h4 className={styles.sidebarTitle}>
-                已保存连接
-                {connections.length > 0 && <span className={styles.sidebarCount}>{connections.length}</span>}
-              </h4>
-
-              {connectionsLoading && (
-                <div role="status" aria-label="正在加载已保存连接">
-                  {[0, 1].map(index => (
-                    <div key={index} className={styles.skeletonRow}>
-                      <div className={styles.skeletonDot} />
-                      <div className={styles.skeletonLines}>
-                        <div className={styles.skeletonLine} style={{ width: '38%' }} />
-                        <div className={styles.skeletonLine} style={{ width: '62%' }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {connectionsError !== null && !connectionsLoading && (
-                <div className={styles.sideError} role="alert">
-                  <span className={styles.sideErrorText}>{connectionsError}</span>
-                  <button type="button" className={styles.retryButton} onClick={() => { void refreshConnections() }}>
-                    <RefreshIcon style={{ width: 12, height: 12 }} />
-                    重试
-                  </button>
-                </div>
-              )}
-
-              {!connectionsLoading && connectionsError === null && connections.length === 0 && (
-                <div className={styles.sideEmpty}>
-                  <ServerIcon className={styles.sideEmptyIcon} style={{ width: 18, height: 18 }} />
-                  <p className={styles.sideEmptyTitle}>还没有保存的连接</p>
-                  <p className={styles.sideEmptyText}>点击「新建连接」，或从上方 SSH 配置主机一键添加。</p>
-                </div>
-              )}
-
-              {!connectionsLoading && connections.length > 0 && (
-                <ul className={styles.connectionList} role="list">
-                  {connections.map(connection => {
-                    const active = mode.kind === 'remote' && mode.id === connection.id
-                    return (
-                      <li key={connection.id} className={cx(styles.connectionItem, active && styles.connectionItemActive)}>
-                        <button
-                          type="button"
-                          className={styles.connectionMain}
-                          aria-current={active ? 'true' : 'false'}
-                          onClick={() => { navigateRemote(connection.id) }}
-                        >
-                          <ServerIcon className={styles.connectionIcon} />
-                          <span className={styles.connectionInfo}>
-                            <span className={styles.connectionLabel}>{connection.label}</span>
-                            <span className={styles.connectionDetail}>
-                              <span className={styles.connectionEndpoint}>
-                                {connection.username}@{connection.host}:{connection.port}
-                              </span>
-                              <span className={styles.badge}>
-                                {connection.auth === 'password' ? <LockIcon style={{ width: 11, height: 11 }} /> : <KeyIcon style={{ width: 11, height: 11 }} />}
-                                {connection.auth === 'password' ? '密码' : connection.auth === 'agent' ? 'Agent' : '私钥'}
-                              </span>
-                              {connection.jumpHosts.length > 0 && (
-                                <span className={styles.badge} title={connection.jumpHosts.join(' → ')}>
-                                  <RouteIcon style={{ width: 11, height: 11 }} />
-                                  跳板 ×{connection.jumpHosts.length}
-                                </span>
-                              )}
-                            </span>
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          className={styles.connectionRemove}
-                          aria-label={`删除连接 ${connection.label}`}
-                          title="删除连接"
-                          onClick={() => { setDeleteTarget(connection) }}
-                        >
-                          <TrashIcon style={{ width: 14, height: 14 }} />
-                        </button>
-                      </li>
-                    )
-                  })}
-                </ul>
-              )}
-            </section>
-
-            <section className={styles.sidebarSection} aria-label="本机">
-              <ul className={styles.connectionList} role="list">
-                <li className={cx(styles.connectionItem, mode.kind === 'local' && styles.connectionItemActive)}>
-                  <button
-                    type="button"
-                    className={styles.connectionMain}
-                    aria-current={mode.kind === 'local' ? 'true' : 'false'}
-                    onClick={() => { if (mode.kind !== 'local') navigateLocal() }}
-                  >
-                    <MonitorIcon className={styles.connectionIcon} />
-                    <span className={styles.connectionInfo}>
-                      <span className={styles.connectionLabel}>本机目录</span>
-                      <span className={styles.connectionDetail}>
-                        <span className={styles.connectionEndpoint}>选择本机目录作为工作区</span>
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              </ul>
-            </section>
           </nav>
 
           <div className={styles.main}>
