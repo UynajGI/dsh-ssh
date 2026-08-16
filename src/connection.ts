@@ -10,7 +10,8 @@
 
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { posix } from 'node:path'
+import { homedir } from 'node:os'
+import { join, posix } from 'node:path'
 import { Client } from 'ssh2'
 import type { ClientChannel, ConnectConfig, SFTPWrapper } from 'ssh2'
 import { wrapCwd } from './runtime.ts'
@@ -62,9 +63,10 @@ export interface SshConnectionSpec {
   keepaliveCountMax?: number
 }
 
-/** Read an identity value that is a local path to a PEM file. */
+/** Read an identity value that is a local path to a PEM file (`~` expanded). */
 function readIdentityFile(path: string): string {
-  return readFileSync(path, 'utf8')
+  const expanded = path === '~' || path.startsWith('~/') ? join(homedir(), path.slice(1)) : path
+  return readFileSync(expanded, 'utf8')
 }
 
 /** Build the ssh2 config for one hop, without the jump socket. */

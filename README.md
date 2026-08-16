@@ -44,7 +44,7 @@ npm i dsh-ssh
 - id: ssh-remote
   name: dsh-ssh
   config:
-    host: 10.0.0.5            # target host (required)
+    host: server.example.com  # target host (required; a ~/.ssh/config alias like prod works too)
     port: 22
     username: root            # required
     privateKey: ~/.ssh/id_ed25519   # identity-file path, or PEM content
@@ -53,14 +53,14 @@ npm i dsh-ssh
     cwd: /root/workspace           # remote working directory (required, absolute POSIX path)
     # --- ProxyJump chain (optional; first hop from local, last hop to target) ---
     jump:
-      - host: 47.xx.xx.1
+      - host: bastion.example.com
         # port: 22             # defaults to the target's
         # username: ubuntu     # defaults to the target's
         privateKey: ~/.ssh/id_ed25519
       # - host: second-hop ...
     # --- Connection & security ---
     readyTimeout: 20000        # ~ ConnectTimeout (ms, default 20s)
-    keepaliveInterval: 0       # ~ ServerAliveInterval (ms, 0 disables)
+    keepaliveInterval: 0       # ~ ServerAliveInterval (0 disables)
     keepaliveCountMax: 3       # ~ ServerAliveCountMax
     strictHostKeyChecking: false   # verify the host key when true
     knownHosts:                    # required when strictHostKeyChecking: true
@@ -81,24 +81,40 @@ The aggregate row is equivalent to three subpath rows — mount them separately 
 ## Add-workspace over SSH (Web GUI)
 
 The Web surface's **Add workspace** flow (the conversation hero picker and the
-sidebar workspace browser) browses directories through the `ctx.directoryPicker`
-capability seam. `dsh-ssh/picker` implements that seam's `browse` capability over
-the shared SFTP channel, so the shipped **Select Workspace Directory** dialog
-lists remote directories, creates remote folders (SFTP mkdir), and adopts picked
-remote paths as workspace paths the dsh-ssh providers already understand.
+sidebar workspace browser) is taken over by the dsh-ssh client UI, laid out as a
+**connection sidebar beside a directory browser** (VS Code Remote Explorer
+style): the sidebar lists `~/.ssh/config` hosts, saved connections, and the
+local entry; the right pane browses whichever side is active. Local listing
+rides the `ctx.directoryPicker` `browse` capability; connection management and
+remote listing ride dsh-ssh's own `/dsh-ssh` RPC channel.
 
-- **Windows hosts** serve both worlds in one picker: local browsing is
-  unchanged, and the remote host appears as a pinned `Remote host user@host`
-  entry on the local home level (label configurable via `remoteLabel`). Routing
-  follows `resolveRemoteCwd`: drive/UNC paths address the local disk,
-  POSIX-absolute paths address the remote host.
-- **POSIX hosts** serve the remote host only — every absolute path is a remote
-  path there, so the local filesystem shares no vocabulary with it.
+### `~/.ssh/config` hosts in the sidebar (`config.hosts`)
 
-The seam registers **one** `ctx.directoryPicker` per context, and a patch layer's
-`name` is a match guard rather than a replacement, so the Web bundle's
-`@deepseek-ai/dsh-host-directory-picker-auto` row must be **disabled by id**
-(its dynamically mounted in-app browser surface disappears with it) and the SSH
+The「SSH 配置主机」sidebar section is driven by the `config.hosts` endpoint:
+every opening **re-reads** the host machine's `~/.ssh/config` and lists its
+**exact Host aliases** (wildcard patterns such as `*.example.com` stay hidden),
+each with the resolved `user@host:port`, IdentityFile presence, and ProxyJump
+presence:
+
+- Clicking an alias resolves its full config (username, port, identity, jump
+  chain), **registers it silently, and drops you straight into that host's
+  directory browser** — no form (VS Code Remote-SSH style). Registered aliases
+  get an「已添加」badge and simply switch on click.
+- An alias without a `User` skips registration and opens a **prefilled form**
+  (port / identity / jumps already filled); only the username is missing.
+- An alias without an `IdentityFile` can be registered, but the connection
+  fails at auth — the right pane translates `All configured authentication
+  methods failed` into a readable hint with a「补全认证」button that opens the
+  prefilled form.
+
+The「新建连接」form is alias-first as well: type a `~/.ssh/config` alias and
+blur or paste auto-resolves and prefills (the manual「识别 ssh 配置」button
+remains the loud fallback); a successful resolve shows a one-line summary
+(alias → user@host:port, identity path, jump chain) inside the form.
+
+A patch layer's `name` is a match guard rather than a replacement, so the Web
+bundle's `@deepseek-ai/dsh-host-directory-picker-auto` row must be **disabled
+by id** (its dynamically mounted in-app picker disappears with it) and the SSH
 backend inserted under its own id. In the Web profile
 (`$DSH_HOME/profiles/web/cordis.patch.yml`):
 
@@ -113,32 +129,42 @@ backend inserted under its own id. In the Web profile
       name: dsh-ssh
       config: { ...same config as the quick start... }
 
-    # The SSH browse backend serving ctx.directoryPicker.
+    # The local-directory browse backend for the client directoryFlow slots.
     - id: directory-picker-ssh
       name: dsh-ssh/picker
       config:
-        # maxEntries: 1000            # optional, one level's row bound (truncated flags a cut)
-        # remoteLabel: '远程主机'      # optional, pinned entry name (default: Remote host user@host)
+        maxEntries: 1000
 
-    # The shipped in-app directory browser (the -auto row used to mount it).
-    - id: ui-directory-picker-browse
-      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
+    # The connection registry + /dsh-ssh RPC (persistence, ~/.ssh/config
+    # awareness, remote directory browsing).
+    - id: ssh-web-channel
+      name: dsh-ssh/web
+      config:
+        maxEntries: 1000
 ```
 
-Picking a remote directory creates a workspace whose path is the remote path
-(`/home/user/project`); because `ctx.fs` and `ctx.subprocess` are the dsh-ssh
-remote providers, sessions in that workspace run entirely on the remote host.
+Picking a remote directory creates a session directly:
+
+```ts
+ctx.sessions.create({ cwd: `ssh://${connectionId}${remotePath}` })
+```
+
+`ctx.subprocess` and `ctx.fs` recognize `ssh://<id>/<path>` cwds and route that
+session's bash / file / terminal operations onto the registered connection's
+directory. The `ssh://` spelling does not enter the DSH local workspace registry
+(see「Known limitations」).
 
 ### Picker configuration (`dsh-ssh/picker`)
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `maxEntries` | number | 1000 | Complete-result bound for one listed level (hidden rows count; `truncated` flags a cut) |
-| `remoteLabel` | string | `Remote host user@host` | Name of the pinned remote entry on the local home level (Windows hosts) |
+| `remoteLabel` | string | — | Retained field: the client flow no longer uses a pinned entry; remote entries live in the left connection sidebar |
 
-The pinned remote entry opens the remote home directory (from the remote login
-environment; falls back to the configured remote `cwd`). On POSIX hosts the
-picker opens at the remote home directly.
+`dsh-ssh/picker` now serves only the `ctx.directoryPicker` `browse` backend
+(local directories keep working on Windows hosts; POSIX absolute paths go to
+the aggregate SSH connection). The client UI's remote connection list and
+remote directory browsing ride the `dsh-ssh/web` RPC channel instead.
 
 ## Configuration reference (`dsh-ssh/ssh`)
 
@@ -183,7 +209,7 @@ picker opens at the remote home directly.
 | Download (remote → local) | full fs provider: read / streamText (streaming decode) / readBytes (bounded) / listDir / stat / lstat |
 | Remote commands | subprocess provider: collect (bounded tail + local spill file), pipe, inherit, batch stdin |
 | Interactive terminals | PTY (`spawnTerminal`), I/O plus TERM→KILL cleanup |
-| Add-workspace GUI | `dsh-ssh/picker`: the directory-picker seam's `browse` backend over SFTP — the Web add-workspace dialog browses the remote host (pinned entry on Windows hosts) |
+| Add-workspace GUI | `dsh-ssh/picker`: the directory-picker seam's `browse` backend; the client UI is a connection sidebar (`~/.ssh/config` one-click hosts + saved connections + local) beside the directory browser |
 | Environment isolation | remote login env scrubbed (`DSH_*` and credential-shaped names removed) + explicit overrides, launched via `env -i` |
 | Concurrency safety | fs writes serialized per target key (no interleaved writes) |
 | Host verification | `strictHostKeyChecking` + `knownHosts` (SHA256 fingerprints or raw keys) |

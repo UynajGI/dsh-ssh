@@ -220,8 +220,8 @@
 .dialog {
   display: flex;
   flex-direction: column;
-  width: min(680px, 100%);
-  max-height: calc(100vh - 48px);
+  width: min(920px, 100%);
+  height: min(620px, calc(100vh - 48px));
   border-radius: 12px;
   background: var(--dshssh-surface);
   color: var(--dshssh-fg);
@@ -259,59 +259,156 @@
   white-space: nowrap;
 }
 
-/* ---------- filesystem tabs ---------- */
+/* ---------- two-pane body: connection sidebar + directory browser ---------- */
 
-.tabs {
+.body {
   display: flex;
-  align-items: center;
-  gap: 4px;
-  margin: 0 16px 12px;
-  padding: 3px;
-  border: 1px solid var(--dshssh-line);
-  border-radius: 9px;
-  background: var(--dshssh-surface-inset);
-  width: fit-content;
-  max-width: calc(100% - 32px);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
-.tab {
-  display: inline-flex;
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  width: 268px;
+  padding: 10px;
+  border-right: 1px solid var(--dshssh-line);
+  background: var(--dshssh-surface-2);
+  overflow-y: auto;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.newConnection {
+  display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  max-width: 260px;
-  padding: 4px 12px;
-  border: none;
-  border-radius: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px dashed var(--dshssh-border-strong);
+  border-radius: 7px;
   background: transparent;
-  color: var(--dshssh-fg-muted);
+  color: var(--dshssh-fg);
   font-size: 12.5px;
   font-weight: 500;
   cursor: pointer;
 }
 
-.tab:hover:not(.tabOn) {
-  color: var(--dshssh-fg);
-}
-
-.tabOn {
-  background: var(--dshssh-surface-3);
-  color: var(--dshssh-fg);
-  box-shadow: inset 0 0 0 1px var(--dshssh-border-strong);
-}
-
-.tabIcon {
-  flex: none;
-  color: var(--dshssh-fg-subtle);
-}
-
-.tabOn .tabIcon {
+.newConnection:hover {
+  border-style: solid;
+  border-color: var(--dshssh-accent);
+  background: var(--dshssh-accent-soft);
   color: var(--dshssh-accent);
 }
 
-.tabLabel {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.sidebarSection {
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebarSection + .sidebarSection {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--dshssh-line);
+}
+
+.newConnection + .sidebarSection {
+  margin-top: 12px;
+}
+
+.sidebarTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  padding: 0 2px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--dshssh-fg-muted);
+  letter-spacing: 0.03em;
+}
+
+.sidebarCount {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--dshssh-surface-3);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 17px;
+  color: var(--dshssh-fg-muted);
+}
+
+.sideError {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--dshssh-danger-soft);
+  border: 1px solid color-mix(in srgb, var(--dshssh-danger) 28%, transparent);
+}
+
+.sideErrorText {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dshssh-danger-text);
+  overflow-wrap: anywhere;
+}
+
+.sideEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 6px 2px 4px;
+}
+
+.sideEmptyIcon {
+  color: var(--dshssh-fg-subtle);
+  margin-bottom: 2px;
+}
+
+.sideEmptyTitle {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--dshssh-fg);
+}
+
+.sideEmptyText {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dshssh-fg-muted);
+}
+
+.hostWorking {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--dshssh-fg-muted);
+  font-size: 12px;
+}
+
+.hostSpinner {
+  width: 12px;
+  height: 12px;
+  color: var(--dshssh-accent);
+}
+
+.hostErrorText {
+  color: var(--dshssh-danger-text);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 /* ---------- toolbar: breadcrumbs + view toggles ---------- */
@@ -436,8 +533,7 @@
 
 .browser {
   flex: 1 1 auto;
-  min-height: 160px;
-  max-height: 320px;
+  min-height: 200px;
   overflow-y: auto;
   padding: 6px 10px 8px 8px;
 }
@@ -568,6 +664,15 @@
   min-width: 0;
 }
 
+.errorActions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  flex: none;
+  align-self: center;
+}
+
 .errorTitle {
   margin: 0;
   font-size: 12.5px;
@@ -628,70 +733,7 @@
   color: var(--dshssh-fg-muted);
 }
 
-/* ---------- remote connections section ---------- */
-
-.remoteSection {
-  flex: none;
-  border-top: 1px solid var(--dshssh-line);
-  background: var(--dshssh-surface-2);
-  padding: 10px 16px 12px;
-  max-height: 216px;
-  overflow-y: auto;
-}
-
-.remoteHead {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.remoteTitle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--dshssh-fg-muted);
-  letter-spacing: 0.02em;
-}
-
-.remoteTitleIcon {
-  flex: none;
-  width: 13px;
-  height: 13px;
-  color: var(--dshssh-fg-subtle);
-}
-
-.remoteCount {
-  padding: 0 6px;
-  border-radius: 8px;
-  background: var(--dshssh-surface-3);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 17px;
-  color: var(--dshssh-fg-muted);
-}
-
-.newRemote {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--dshssh-border);
-  background: transparent;
-  color: var(--dshssh-fg);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.newRemote:hover {
-  background: var(--dshssh-surface-3);
-  border-color: var(--dshssh-border-strong);
-}
+/* ---------- sidebar connection rows (config hosts / saved / local) ---------- */
 
 .connectionList {
   list-style: none;
@@ -800,6 +842,12 @@
   height: 11px;
 }
 
+.badgeAdded {
+  background: var(--dshssh-success-soft);
+  border-color: color-mix(in srgb, var(--dshssh-success) 30%, transparent);
+  color: var(--dshssh-success-text);
+}
+
 .connectionRemove {
   display: inline-flex;
   align-items: center;
@@ -830,52 +878,6 @@
   .connectionRemove {
     opacity: 1;
   }
-}
-
-.remoteError {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--dshssh-danger-soft);
-  border: 1px solid color-mix(in srgb, var(--dshssh-danger) 28%, transparent);
-}
-
-.remoteErrorText {
-  flex: 1 1 auto;
-  min-width: 0;
-  margin: 0;
-  font-size: 12px;
-  color: var(--dshssh-danger-text);
-  overflow-wrap: anywhere;
-}
-
-.remoteEmpty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  padding: 12px 8px;
-  text-align: center;
-}
-
-.remoteEmptyTitle {
-  margin: 0;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--dshssh-fg);
-}
-
-.remoteEmptyText {
-  margin: 0;
-  font-size: 12px;
-  color: var(--dshssh-fg-muted);
-}
-
-.remoteEmptyIcon {
-  color: var(--dshssh-fg-subtle);
-  margin-bottom: 2px;
 }
 
 .skeletonRow {
@@ -1180,9 +1182,9 @@
   overflow-wrap: anywhere;
 }
 
-/* ---------- small screens ---------- */
+/* ---------- small screens: stack the panes, keep the browser usable ---------- */
 
-@media (max-width: 560px) {
+@media (max-width: 640px) {
   .overlay {
     padding: 12px;
   }
@@ -1191,6 +1193,30 @@
   .smallDialog,
   .form {
     max-height: calc(100vh - 24px);
+  }
+
+  .body {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: auto;
+    max-height: 38%;
+    border-right: none;
+    border-bottom: 1px solid var(--dshssh-line);
+  }
+
+  .main {
+    min-height: 0;
+  }
+
+  .errorPanel {
+    flex-wrap: wrap;
+  }
+
+  .errorActions {
+    flex-direction: row;
+    align-self: flex-start;
   }
 
   .toolbar {

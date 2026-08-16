@@ -1,10 +1,10 @@
 /**
- * Browser half of dsh-ssh: the add-workspace directory flow that puts the
- * local directory browser on top and the SSH connection manager (「新建远程」)
- * below. Registered into both directory-flow holes, so mounting `dsh-ssh`
- * composes the whole picking interaction. Cross-plane calls ride the shared
- * web transport: local listing through the `workspaces` service (the Host's
- * `directoryPicker` browse capability) and remote listing/connection
+ * Browser half of dsh-ssh: the add-workspace directory flow — a connection
+ * sidebar (saved connections, `~/.ssh/config` hosts, local entry) beside the
+ * directory browser. Registered into both directory-flow holes, so mounting
+ * `dsh-ssh` composes the whole picking interaction. Cross-plane calls ride the
+ * shared web transport: local listing through the `workspaces` service (the
+ * Host's `directoryPicker` browse capability) and remote listing/connection
  * management through the package's `/dsh-ssh` RPC channel.
  */
 
@@ -35,6 +35,16 @@ export interface ConnectionView {
   cwd?: string
   auth: 'password' | 'key' | 'agent'
   jumpHosts: string[]
+}
+
+/** One exact `~/.ssh/config` Host alias (the `config.hosts` wire row). */
+export interface ConfigHostView {
+  alias: string
+  host: string
+  username: string
+  port: number
+  identityFile: boolean
+  jump: boolean
 }
 
 export type WireResult =

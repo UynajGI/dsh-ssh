@@ -1,18 +1,21 @@
 /**
- * The add-workspace directory flow of dsh-ssh: the local directory browser on
- * top, the SSH connection manager (「＋ 新建远程」) below. Remote levels browse
- * through the package's RPC channel; picking a remote directory hands the
- * owner an `ssh://<id><path>` workspace path, which the deployment's remote
+ * The add-workspace directory flow of dsh-ssh, laid out as a connection
+ * sidebar beside a directory browser (VS Code Remote Explorer style): the
+ * sidebar lists `~/.ssh/config` hosts (one click resolves, registers, and
+ * browses — no form), saved connections, and the local entry; the right pane
+ * browses whichever side is active. Picking a remote directory hands the owner
+ * an `ssh://<id><path>` workspace path, which the deployment's remote
  * providers consume (see README for the workspace-adoption seam).
  */
 
 import { useEffect, useRef, useState } from 'react'
-import type { ConnectionView, WireEntry, WireListing, WireResult } from './index.ts'
+import type { ConfigHostView, ConnectionView, WireEntry, WireListing, WireResult } from './index.ts'
 import { ConnectionForm } from './form.tsx'
-import type { ConnectionInputWire, ResolvedSshConfigView } from './form.tsx'
+import type { ConnectionDraft, ConnectionInputWire, ResolvedSshConfigView } from './form.tsx'
 import { cx, useDialogA11y } from './ui.ts'
 import {
   AlertIcon,
+  CheckIcon,
   ChevronIcon,
   CloseIcon,
   EyeIcon,
@@ -61,6 +64,13 @@ interface Pane {
 
 const EMPTY_PANE: Pane = { path: null, listing: null, error: null, loading: false }
 
+/** A remote failure translated for the right pane (auth ones can route to the form). */
+interface RemoteFailure {
+  title: string
+  text: string
+  needsAuth: boolean
+}
+
 /** Unwrap a wire result or throw its business error. */
 function unwrap<T>(result: WireResult, fallback: string): T {
   if (!result.ok) throw new Error(result.error.message || fallback)
@@ -73,21 +83,105 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 /** Minimal structural check for a wire listing. */
 function asListing(value: unknown): WireListing {
   const record = isRecord(value) ? value : {}
+  const wireEntry = (entry: unknown): WireEntry => ({
+    name: String((entry as Record<string, unknown> | undefined)?.name ?? ''),
+    path: String((entry as Record<string, unknown> | undefined)?.path ?? ''),
+    hidden: (entry as Record<string, unknown> | undefined)?.hidden === true,
+  })
   return {
     path: typeof record.path === 'string' ? record.path : '',
     home: typeof record.home === 'string' ? record.home : '',
-    crumbs: Array.isArray(record.crumbs) ? record.crumbs.filter(isRecord).map(crumb => ({
-      name: String(crumb.name ?? ''),
-      path: String(crumb.path ?? ''),
-      hidden: crumb.hidden === true,
-    })) : [],
-    entries: Array.isArray(record.entries) ? record.entries.filter(isRecord).map(entry => ({
-      name: String(entry.name ?? ''),
-      path: String(entry.path ?? ''),
-      hidden: entry.hidden === true,
-    })) : [],
+    crumbs: Array.isArray(record.crumbs) ? record.crumbs.filter(isRecord).map(wireEntry) : [],
+    entries: Array.isArray(record.entries) ? record.entries.filter(isRecord).map(wireEntry) : [],
     truncated: record.truncated === true,
   }
+}
+
+/** Structural check for one `config.hosts` row. */
+function asConfigHosts(value: unknown): ConfigHostView[] {
+  if (!Array.isArray(value)) return []
+  return value.filter(isRecord).map(record => ({
+    alias: String(record.alias ?? ''),
+    host: String(record.host ?? ''),
+    username: String(record.username ?? ''),
+    port: typeof record.port === 'number' ? record.port : 22,
+    identityFile: record.identityFile === true,
+    jump: record.jump === true,
+  })).filter(host => host.alias !== '')
+}
+
+/** Structural check for one secret-free connection view. */
+function asConnectionView(record: Record<string, unknown>): ConnectionView {
+  return {
+    id: String(record.id ?? ''),
+    label: String(record.label ?? ''),
+    host: String(record.host ?? ''),
+    port: typeof record.port === 'number' ? record.port : 22,
+    username: String(record.username ?? ''),
+    ...(typeof record.cwd === 'string' ? { cwd: record.cwd } : {}),
+    auth: (record.auth === 'password' || record.auth === 'agent' ? record.auth : 'key') as ConnectionView['auth'],
+    jumpHosts: Array.isArray(record.jumpHosts) ? record.jumpHosts.map(String) : [],
+  }
+}
+
+/** Structural check for a `connections.resolve` result. */
+function asResolved(value: unknown): ResolvedSshConfigView {
+  const record = isRecord(value) ? value : {}
+  return {
+    host: typeof record.host === 'string' ? record.host : '',
+    username: typeof record.username === 'string' ? record.username : '',
+    port: typeof record.port === 'number' ? record.port : 22,
+    privateKeyPaths: Array.isArray(record.privateKeyPaths) ? record.privateKeyPaths.map(String) : [],
+    jump: Array.isArray(record.jump) ? record.jump.filter(isRecord).map(hop => ({
+      host: String(hop.host ?? ''),
+      ...(typeof hop.port === 'number' ? { port: hop.port } : {}),
+      ...(typeof hop.username === 'string' && hop.username !== '' ? { username: hop.username } : {}),
+      ...(hop.privateKeyPath !== undefined ? { privateKeyPath: String(hop.privateKeyPath) } : {}),
+    })) : [],
+    alias: typeof record.alias === 'string' ? record.alias : '',
+  }
+}
+
+/** Structural check for a `connections.add` result (its view only). */
+function asAddedView(value: unknown): ConnectionView {
+  const record = isRecord(value) ? value : {}
+  return asConnectionView(isRecord(record.view) ? record.view : {})
+}
+
+/**
+ * Translate a raw ssh2/web error into a readable remote failure. ssh2 never
+ * consults the OS agent or default identities on its own, so a spec without
+ * password/privateKey/agent surfaces as `All configured authentication
+ * methods failed` — that one gets the auth-completion guidance.
+ */
+function describeRemoteFailure(raw: string): RemoteFailure {
+  if (/all configured authentication methods/i.test(raw)) {
+    return {
+      title: '认证失败',
+      text: '该主机没有可用的私钥或密码，SSH 服务器拒绝了登录。可点击「补全认证」，在表单中填写认证信息后重试。',
+      needsAuth: true,
+    }
+  }
+  if (/cannot parse privatekey|cannot read private key|invalid private key|no key found/i.test(raw)) {
+    return {
+      title: '私钥不可用',
+      text: `无法读取或解析私钥文件，请检查路径、口令与文件权限。原始错误：${raw}`,
+      needsAuth: true,
+    }
+  }
+  if (/timed?\s?out|etimedout/i.test(raw)) {
+    return { title: '连接超时', text: '在超时前未能建立连接，请检查主机名、端口与网络可达性。', needsAuth: false }
+  }
+  if (/econnrefused/i.test(raw)) {
+    return { title: '连接被拒绝', text: '目标端口未开放或拒绝了连接，请核对端口。', needsAuth: false }
+  }
+  if (/enotfound|getaddrinfo|dns/i.test(raw)) {
+    return { title: '找不到主机', text: '域名解析失败，请核对主机名或修正 ~/.ssh/config 中的 HostName。', needsAuth: false }
+  }
+  if (/ehostunreach|enetunreach/i.test(raw)) {
+    return { title: '网络不可达', text: '本机无法路由到该主机，请检查网络或跳板配置。', needsAuth: false }
+  }
+  return { title: '无法连接远程主机', text: raw, needsAuth: false }
 }
 
 /** The directory-flow occupant registered into both workspace holes. */
@@ -99,7 +193,13 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
   const [connections, setConnections] = useState<ConnectionView[]>([])
   const [connectionsLoading, setConnectionsLoading] = useState(false)
   const [connectionsError, setConnectionsError] = useState<string | null>(null)
+  const [configHosts, setConfigHosts] = useState<ConfigHostView[]>([])
+  const [configLoading, setConfigLoading] = useState(false)
+  const [configError, setConfigError] = useState<string | null>(null)
+  const [hostPending, setHostPending] = useState<string | null>(null)
+  const [hostError, setHostError] = useState<{ alias: string; message: string } | null>(null)
   const [formOpen, setFormOpen] = useState(false)
+  const [formDraft, setFormDraft] = useState<ConnectionDraft | undefined>(undefined)
   const [folderDraft, setFolderDraft] = useState<string | null>(null)
   const [openingRemote, setOpeningRemote] = useState(false)
   const [folderBusy, setFolderBusy] = useState(false)
@@ -110,6 +210,8 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
 
   const generation = useRef(0)
   const activeRequest = useRef<AbortController | null>(null)
+  const configGeneration = useRef(0)
+  const configRequest = useRef<AbortController | null>(null)
   const modeRef = useRef<Mode>(mode)
   modeRef.current = mode
   const paneRef = useRef<Pane>(pane)
@@ -167,17 +269,7 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
     try {
       const value = unwrap(await rpc('connections.list'), 'connections.list failed')
       if (Array.isArray(value)) {
-        const views = value.filter(isRecord).map(record => ({
-          id: String(record.id ?? ''),
-          label: String(record.label ?? ''),
-          host: String(record.host ?? ''),
-          port: typeof record.port === 'number' ? record.port : 22,
-          username: String(record.username ?? ''),
-          ...(typeof record.cwd === 'string' ? { cwd: record.cwd } : {}),
-          auth: (record.auth === 'password' || record.auth === 'agent' ? record.auth : 'key') as ConnectionView['auth'],
-          jumpHosts: Array.isArray(record.jumpHosts) ? record.jumpHosts.map(String) : [],
-        }))
-        setConnections(views)
+        setConnections(value.filter(isRecord).map(asConnectionView))
         setConnectionsError(null)
       }
     } catch (error) {
@@ -187,23 +279,53 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
     }
   }
 
-  /** Open: refresh connections and land on the local home. Closed: abort pending work. */
+  /**
+   * Refresh the `~/.ssh/config` host list (the Host re-reads the file on every
+   * call). Same generation + abort guard as the directory pane so closing the
+   * dialog or a rapid retry can never apply a stale answer.
+   */
+  const refreshConfigHosts = async (silent = false): Promise<void> => {
+    if (!silent) setConfigLoading(true)
+    const current = configGeneration.current += 1
+    const controller = new AbortController()
+    configRequest.current = controller
+    try {
+      const value = unwrap(await rpc('config.hosts', {}, controller.signal), 'config.hosts failed')
+      if (current !== configGeneration.current || controller.signal.aborted) return
+      setConfigHosts(asConfigHosts(value))
+      setConfigError(null)
+    } catch (error) {
+      if (current !== configGeneration.current || controller.signal.aborted) return
+      setConfigError(error instanceof Error ? error.message : String(error))
+    } finally {
+      if (current === configGeneration.current && !silent) setConfigLoading(false)
+    }
+  }
+
+  /** Open: refresh both sidebar lists and land on the local home. Closed: abort. */
   useEffect(() => {
     if (!open) {
       generation.current += 1
       activeRequest.current?.abort()
       activeRequest.current = null
+      configGeneration.current += 1
+      configRequest.current?.abort()
+      configRequest.current = null
       return
     }
     generation.current += 1
     setPane(EMPTY_PANE)
     setFolderDraft(null)
     setFormOpen(false)
+    setFormDraft(undefined)
     setOpeningRemote(false)
     setDeleteTarget(null)
     setRemovingId(null)
+    setHostPending(null)
+    setHostError(null)
     setMode({ kind: 'local' })
     void refreshConnections()
+    void refreshConfigHosts()
     void loadLevel(signal => listLocalDirectory(undefined, signal))
   }, [open])
 
@@ -216,6 +338,78 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
     if (modeRef.current.kind === 'local') navigateLocal(paneRef.current.path ?? undefined)
     else navigateRemote(modeRef.current.id, paneRef.current.path ?? undefined)
   }
+
+  /** The registry entry a config alias points at, if it was registered before. */
+  const matchConfigHost = (host: ConfigHostView): ConnectionView | undefined =>
+    connections.find(connection =>
+      connection.port === host.port
+      && (connection.host.toLowerCase() === host.alias.toLowerCase()
+        || connection.host.toLowerCase() === host.host.toLowerCase()))
+
+  const openForm = (draft?: ConnectionDraft): void => {
+    setFormDraft(draft)
+    setFormOpen(true)
+  }
+
+  /**
+   * One click on a config host: switch to its registered entry when there is
+   * one, otherwise resolve the alias, register it silently, and browse its
+   * home right away (VS Code Remote-SSH style). A missing username routes to
+   * the prefilled form instead — the registry refuses empty usernames.
+   */
+  const activateConfigHost = async (host: ConfigHostView): Promise<void> => {
+    if (hostPending !== null) return
+    const existing = matchConfigHost(host)
+    if (existing !== undefined) {
+      setHostError(null)
+      navigateRemote(existing.id)
+      return
+    }
+    setHostError(null)
+    setHostPending(host.alias)
+    try {
+      const resolved = asResolved(unwrap(await rpc('connections.resolve', { host: host.alias }), 'connections.resolve failed'))
+      if (resolved.host === '') throw new Error('别名解析结果为空')
+      if (resolved.username.trim() === '') {
+        openForm({
+          label: host.alias,
+          host: resolved.host,
+          port: String(resolved.port),
+          username: '',
+          ...(resolved.privateKeyPaths[0] !== undefined ? { privateKeyPath: resolved.privateKeyPaths[0] } : {}),
+          ...(resolved.jump.length > 0 ? { jumpText: resolved.jump.map(hop => `${hop.username !== undefined && hop.username !== '' ? `${hop.username}@` : ''}${hop.host}${hop.port !== undefined && hop.port !== 22 ? `:${String(hop.port)}` : ''}`).join(', ') } : {}),
+          focusUsername: true,
+        })
+        return
+      }
+      const result = await rpc('connections.add', {
+        label: host.alias,
+        host: resolved.host,
+        port: resolved.port,
+        username: resolved.username,
+        ...(resolved.privateKeyPaths[0] !== undefined ? { privateKeyPath: resolved.privateKeyPaths[0] } : {}),
+        ...(resolved.jump.length > 0 ? { jump: resolved.jump } : {}),
+      })
+      const view = asAddedView(unwrap(result, 'connections.add failed'))
+      if (view.id === '') throw new Error('注册结果缺少连接 id')
+      await refreshConnections(true)
+      await refreshConfigHosts(true)
+      navigateRemote(view.id)
+    } catch (error) {
+      setHostError({ alias: host.alias, message: error instanceof Error ? error.message : String(error) })
+    } finally {
+      setHostPending(null)
+    }
+  }
+
+  /** A prefilled form for the connection whose browse just failed on auth. */
+  const draftFromConnection = (connection: ConnectionView): ConnectionDraft => ({
+    label: connection.label,
+    host: connection.host,
+    port: String(connection.port),
+    username: connection.username,
+    ...(connection.jumpHosts.length > 0 ? { jumpText: connection.jumpHosts.join(', ') } : {}),
+  })
 
   const confirmCreateFolder = async (): Promise<void> => {
     const name = (folderDraft ?? '').trim()
@@ -247,6 +441,7 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
     try {
       unwrap(await rpc('connections.remove', { id: deleteTarget.id }), 'connections.remove failed')
       await refreshConnections(true)
+      await refreshConfigHosts(true)
       if (mode.kind === 'remote' && mode.id === deleteTarget.id) {
         setMode({ kind: 'local' })
         void loadLevel(signal => listLocalDirectory(undefined, signal))
@@ -271,14 +466,15 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
   const formSave = async (input: ConnectionInputWire): Promise<{ ok: boolean; message?: string; view?: ConnectionView }> => {
     const result = await rpc('connections.add', input)
     if (!result.ok) return { ok: false, message: result.error.message }
-    const record = isRecord(result.value) ? result.value : {}
-    const view = isRecord(record.view) ? record.view as unknown as ConnectionView : undefined
-    return { ok: true, ...(view !== undefined ? { view } : {}) }
+    const view = asAddedView(result.value)
+    return { ok: true, ...(view.id !== '' ? { view } : {}) }
   }
 
   const formSaved = async (view: ConnectionView): Promise<void> => {
     setFormOpen(false)
+    setFormDraft(undefined)
     await refreshConnections(true)
+    await refreshConfigHosts(true)
     navigateRemote(view.id)
   }
 
@@ -290,7 +486,10 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
 
   const subtitle = mode.kind === 'local'
     ? '选择一个本机目录作为新工作区'
-    : '选择远程目录，将创建 SSH 远程会话'
+    : `正在浏览 ${activeConnection !== undefined ? `${activeConnection.username}@${activeConnection.host}:${activeConnection.port}` : mode.id} 的远程目录`
+
+  /** The translated remote failure for the right pane, when there is one. */
+  const remoteFailure = mode.kind === 'remote' && pane.error !== null ? describeRemoteFailure(pane.error) : null
 
   if (!open) return null
 
@@ -307,261 +506,384 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
           </button>
         </header>
 
-        <div className={styles.tabs}>
-          <button
-            type="button"
-            className={cx(styles.tab, mode.kind === 'local' && styles.tabOn)}
-            aria-pressed={mode.kind === 'local'}
-            onClick={() => { if (mode.kind !== 'local') navigateLocal() }}
-          >
-            <MonitorIcon className={styles.tabIcon} />
-            <span className={styles.tabLabel}>本机</span>
-          </button>
-          {mode.kind === 'remote' && (
-            <button
-              type="button"
-              className={cx(styles.tab, styles.tabOn)}
-              aria-pressed
-              title={activeConnection !== undefined ? `${activeConnection.username}@${activeConnection.host}:${activeConnection.port}` : mode.id}
-            >
-              <ServerIcon className={styles.tabIcon} />
-              <span className={styles.tabLabel}>{activeConnection?.label ?? mode.id}</span>
+        <div className={styles.body}>
+          <nav className={styles.sidebar} aria-label="连接与位置">
+            <button type="button" className={styles.newConnection} onClick={() => { openForm() }}>
+              <PlusIcon style={{ width: 12, height: 12 }} />
+              新建连接
             </button>
-          )}
-        </div>
 
-        <div className={styles.toolbar}>
-          <nav className={styles.crumbs} aria-label="当前路径">
-            <button
-              type="button"
-              className={styles.crumb}
-              aria-label="回到主目录"
-              title="主目录"
-              disabled={home === '' || pane.loading}
-              onClick={() => {
-                if (mode.kind === 'local') navigateLocal(home)
-                else navigateRemote(mode.id, home)
-              }}
-            >
-              <HomeIcon style={{ width: 13, height: 13, verticalAlign: '-2px' }} />
-            </button>
-            {crumbs.map((crumb, index) =>
-              index === lastCrumbIndex ? (
-                <span key={crumb.path} className={styles.crumbCurrent} aria-current="page" title={crumb.path}>
-                  {crumb.name}
-                </span>
-              ) : (
-                <span key={crumb.path} className={styles.crumbStep}>
+            <section className={styles.sidebarSection} aria-label="SSH 配置主机">
+              <h4 className={styles.sidebarTitle}>
+                SSH 配置主机
+                {configHosts.length > 0 && <span className={styles.sidebarCount}>{configHosts.length}</span>}
+              </h4>
+
+              {configLoading && (
+                <div role="status" aria-label="正在读取 ~/.ssh/config">
+                  {[0, 1].map(index => (
+                    <div key={index} className={styles.skeletonRow}>
+                      <div className={styles.skeletonDot} />
+                      <div className={styles.skeletonLines}>
+                        <div className={styles.skeletonLine} style={{ width: '38%' }} />
+                        <div className={styles.skeletonLine} style={{ width: '62%' }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {configError !== null && !configLoading && (
+                <div className={styles.sideError} role="alert">
+                  <span className={styles.sideErrorText}>无法读取 ~/.ssh/config：{configError}</span>
+                  <button type="button" className={styles.retryButton} onClick={() => { void refreshConfigHosts() }}>
+                    <RefreshIcon style={{ width: 12, height: 12 }} />
+                    重试
+                  </button>
+                </div>
+              )}
+
+              {!configLoading && configError === null && configHosts.length === 0 && (
+                <div className={styles.sideEmpty}>
+                  <p className={styles.sideEmptyTitle}>未发现 SSH 配置主机</p>
+                  <p className={styles.sideEmptyText}>在 ~/.ssh/config 中添加 Host 条目后，这里会直接列出，点击即可连接。</p>
+                </div>
+              )}
+
+              {!configLoading && configHosts.length > 0 && (
+                <ul className={styles.connectionList} role="list">
+                  {configHosts.map(host => {
+                    const registered = matchConfigHost(host)
+                    const active = registered !== undefined && mode.kind === 'remote' && mode.id === registered.id
+                    const working = hostPending === host.alias
+                    const failed = hostError !== null && hostError.alias === host.alias
+                    return (
+                      <li key={host.alias} className={cx(styles.connectionItem, active && styles.connectionItemActive)}>
+                        <button
+                          type="button"
+                          className={styles.connectionMain}
+                          aria-current={active ? 'true' : 'false'}
+                          disabled={hostPending !== null}
+                          title={registered !== undefined
+                            ? `已注册为 ${registered.username}@${registered.host}:${registered.port}`
+                            : host.username !== ''
+                              ? `${host.username}@${host.host}:${host.port} — 点击注册并浏览`
+                              : '未指定用户 — 点击打开表单补全'}
+                          onClick={() => { void activateConfigHost(host) }}
+                        >
+                          <ServerIcon className={styles.connectionIcon} />
+                          <span className={styles.connectionInfo}>
+                            <span className={styles.connectionLabel}>{host.alias}</span>
+                            <span className={styles.connectionDetail}>
+                              {working ? (
+                                <span className={styles.hostWorking}>
+                                  <SpinnerIcon className={cx(styles.spin, styles.hostSpinner)} />
+                                  正在添加并连接…
+                                </span>
+                              ) : failed && hostError !== null ? (
+                                <span className={styles.hostErrorText} role="alert">添加失败：{hostError.message}</span>
+                              ) : (
+                                <>
+                                  <span className={styles.connectionEndpoint}>
+                                    {host.username !== '' ? `${host.username}@${host.host}:${host.port}` : '未指定用户'}
+                                  </span>
+                                  {registered !== undefined ? (
+                                    <span className={cx(styles.badge, styles.badgeAdded)}>
+                                      <CheckIcon style={{ width: 11, height: 11 }} />
+                                      已添加
+                                    </span>
+                                  ) : (
+                                    <>
+                                      {host.identityFile && (
+                                        <span className={styles.badge}>
+                                          <KeyIcon style={{ width: 11, height: 11 }} />
+                                          私钥
+                                        </span>
+                                      )}
+                                      {host.jump && (
+                                        <span className={styles.badge}>
+                                          <RouteIcon style={{ width: 11, height: 11 }} />
+                                          跳板
+                                        </span>
+                                      )}
+                                    </>
+                                  )}
+                                </>
+                              )}
+                            </span>
+                          </span>
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </section>
+
+            <section className={styles.sidebarSection} aria-label="已保存连接">
+              <h4 className={styles.sidebarTitle}>
+                已保存连接
+                {connections.length > 0 && <span className={styles.sidebarCount}>{connections.length}</span>}
+              </h4>
+
+              {connectionsLoading && (
+                <div role="status" aria-label="正在加载已保存连接">
+                  {[0, 1].map(index => (
+                    <div key={index} className={styles.skeletonRow}>
+                      <div className={styles.skeletonDot} />
+                      <div className={styles.skeletonLines}>
+                        <div className={styles.skeletonLine} style={{ width: '38%' }} />
+                        <div className={styles.skeletonLine} style={{ width: '62%' }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {connectionsError !== null && !connectionsLoading && (
+                <div className={styles.sideError} role="alert">
+                  <span className={styles.sideErrorText}>{connectionsError}</span>
+                  <button type="button" className={styles.retryButton} onClick={() => { void refreshConnections() }}>
+                    <RefreshIcon style={{ width: 12, height: 12 }} />
+                    重试
+                  </button>
+                </div>
+              )}
+
+              {!connectionsLoading && connectionsError === null && connections.length === 0 && (
+                <div className={styles.sideEmpty}>
+                  <ServerIcon className={styles.sideEmptyIcon} style={{ width: 18, height: 18 }} />
+                  <p className={styles.sideEmptyTitle}>还没有保存的连接</p>
+                  <p className={styles.sideEmptyText}>点击「新建连接」，或从上方 SSH 配置主机一键添加。</p>
+                </div>
+              )}
+
+              {!connectionsLoading && connections.length > 0 && (
+                <ul className={styles.connectionList} role="list">
+                  {connections.map(connection => {
+                    const active = mode.kind === 'remote' && mode.id === connection.id
+                    return (
+                      <li key={connection.id} className={cx(styles.connectionItem, active && styles.connectionItemActive)}>
+                        <button
+                          type="button"
+                          className={styles.connectionMain}
+                          aria-current={active ? 'true' : 'false'}
+                          onClick={() => { navigateRemote(connection.id) }}
+                        >
+                          <ServerIcon className={styles.connectionIcon} />
+                          <span className={styles.connectionInfo}>
+                            <span className={styles.connectionLabel}>{connection.label}</span>
+                            <span className={styles.connectionDetail}>
+                              <span className={styles.connectionEndpoint}>
+                                {connection.username}@{connection.host}:{connection.port}
+                              </span>
+                              <span className={styles.badge}>
+                                {connection.auth === 'password' ? <LockIcon style={{ width: 11, height: 11 }} /> : <KeyIcon style={{ width: 11, height: 11 }} />}
+                                {connection.auth === 'password' ? '密码' : connection.auth === 'agent' ? 'Agent' : '私钥'}
+                              </span>
+                              {connection.jumpHosts.length > 0 && (
+                                <span className={styles.badge} title={connection.jumpHosts.join(' → ')}>
+                                  <RouteIcon style={{ width: 11, height: 11 }} />
+                                  跳板 ×{connection.jumpHosts.length}
+                                </span>
+                              )}
+                            </span>
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.connectionRemove}
+                          aria-label={`删除连接 ${connection.label}`}
+                          title="删除连接"
+                          onClick={() => { setDeleteTarget(connection) }}
+                        >
+                          <TrashIcon style={{ width: 14, height: 14 }} />
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </section>
+
+            <section className={styles.sidebarSection} aria-label="本机">
+              <ul className={styles.connectionList} role="list">
+                <li className={cx(styles.connectionItem, mode.kind === 'local' && styles.connectionItemActive)}>
                   <button
                     type="button"
-                    className={styles.crumb}
-                    disabled={pane.loading}
-                    onClick={() => {
-                      if (mode.kind === 'local') navigateLocal(crumb.path)
-                      else navigateRemote(mode.id, crumb.path)
-                    }}
-                  >{crumb.name}</button>
-                  <span className={styles.crumbSep} aria-hidden>/</span>
-                </span>
-              ),
-            )}
-          </nav>
-          <div className={styles.toolbarActions}>
-            <button
-              type="button"
-              className={cx(styles.toolButton, showHidden && styles.toolButtonOn)}
-              aria-pressed={showHidden}
-              aria-label={showHidden ? '隐藏以点开头的文件夹' : '显示以点开头的文件夹'}
-              title={showHidden ? '隐藏点开头的文件夹' : '显示点开头的文件夹'}
-              onClick={() => { setShowHidden(previous => !previous) }}
-            >
-              <EyeIcon />
-              {!showHidden && hiddenCount > 0 && <span className={styles.countBadge} aria-hidden>{hiddenCount}</span>}
-            </button>
-            <button
-              type="button"
-              className={styles.toolButton}
-              aria-label="刷新当前目录"
-              title="刷新"
-              disabled={pane.loading || pane.listing === null}
-              onClick={refreshCurrent}
-            >
-              <RefreshIcon className={pane.loading ? styles.spin : undefined} />
-            </button>
-          </div>
-        </div>
-
-        <div
-          className={cx(styles.browser, pane.loading && pane.listing !== null && styles.browserBusy)}
-          aria-busy={pane.loading}
-        >
-          {pane.loading && pane.listing === null && (
-            <div className={styles.skeletons} role="status" aria-label="正在加载目录">
-              {[52, 78, 64, 90, 45, 71].map((width, index) => (
-                <div key={index} className={styles.skeleton} style={{ width: `${width}%` }} />
-              ))}
-            </div>
-          )}
-
-          {pane.error !== null && !pane.loading && (
-            <div className={styles.errorPanel} role="alert">
-              <AlertIcon className={styles.errorIcon} />
-              <div className={styles.errorBody}>
-                <p className={styles.errorTitle}>{mode.kind === 'remote' ? '无法读取远程目录' : '无法读取目录'}</p>
-                <p className={styles.errorText}>{pane.error}</p>
-              </div>
-              <button type="button" className={styles.retryButton} onClick={refreshCurrent}>
-                <RefreshIcon style={{ width: 12, height: 12 }} />
-                重试
-              </button>
-            </div>
-          )}
-
-          {pane.listing !== null && visibleEntries.length === 0 && !pane.loading && pane.error === null && (
-            <div className={styles.emptyState}>
-              <FolderIcon className={styles.emptyIcon} style={{ width: 22, height: 22 }} />
-              <p className={styles.emptyTitle}>没有子文件夹</p>
-              <p className={styles.emptyText}>
-                {hiddenCount > 0 && !showHidden
-                  ? `另有 ${hiddenCount} 个点开头的文件夹未显示`
-                  : '可直接在此目录新建文件夹，或选择上方路径'}
-              </p>
-            </div>
-          )}
-
-          {visibleEntries.length > 0 && (
-            <ul className={styles.entryList} role="list">
-              {visibleEntries.map(entry => (
-                <li key={entry.path}>
-                  <button
-                    type="button"
-                    className={cx(styles.entry, entry.hidden && styles.entryHidden)}
-                    onClick={() => {
-                      if (mode.kind === 'local') navigateLocal(entry.path)
-                      else navigateRemote(mode.id, entry.path)
-                    }}
+                    className={styles.connectionMain}
+                    aria-current={mode.kind === 'local' ? 'true' : 'false'}
+                    onClick={() => { if (mode.kind !== 'local') navigateLocal() }}
                   >
-                    <FolderIcon className={styles.entryIcon} />
-                    <span className={styles.entryName}>{entry.name}</span>
-                    <ChevronIcon className={styles.entryChevron} />
+                    <MonitorIcon className={styles.connectionIcon} />
+                    <span className={styles.connectionInfo}>
+                      <span className={styles.connectionLabel}>本机目录</span>
+                      <span className={styles.connectionDetail}>
+                        <span className={styles.connectionEndpoint}>选择本机目录作为工作区</span>
+                      </span>
+                    </span>
                   </button>
                 </li>
-              ))}
-            </ul>
-          )}
+              </ul>
+            </section>
+          </nav>
 
-          {pane.listing?.truncated === true && (
-            <p className={styles.truncated}>文件夹过多，仅显示开头部分。</p>
-          )}
-        </div>
+          <div className={styles.main}>
+            <div className={styles.toolbar}>
+              <nav className={styles.crumbs} aria-label="当前路径">
+                <button
+                  type="button"
+                  className={styles.crumb}
+                  aria-label="回到主目录"
+                  title="主目录"
+                  disabled={home === '' || pane.loading}
+                  onClick={() => {
+                    if (mode.kind === 'local') navigateLocal(home)
+                    else navigateRemote(mode.id, home)
+                  }}
+                >
+                  <HomeIcon style={{ width: 13, height: 13, verticalAlign: '-2px' }} />
+                </button>
+                {crumbs.map((crumb, index) =>
+                  index === lastCrumbIndex ? (
+                    <span key={crumb.path} className={styles.crumbCurrent} aria-current="page" title={crumb.path}>
+                      {crumb.name}
+                    </span>
+                  ) : (
+                    <span key={crumb.path} className={styles.crumbStep}>
+                      <button
+                        type="button"
+                        className={styles.crumb}
+                        disabled={pane.loading}
+                        onClick={() => {
+                          if (mode.kind === 'local') navigateLocal(crumb.path)
+                          else navigateRemote(mode.id, crumb.path)
+                        }}
+                      >{crumb.name}</button>
+                      <span className={styles.crumbSep} aria-hidden>/</span>
+                    </span>
+                  ),
+                )}
+              </nav>
+              <div className={styles.toolbarActions}>
+                <button
+                  type="button"
+                  className={styles.toolButton}
+                  aria-label="在当前目录新建文件夹"
+                  title="新建文件夹"
+                  disabled={pane.listing === null || pane.loading}
+                  onClick={() => {
+                    setFolderDraft('')
+                    setFolderError(null)
+                  }}
+                >
+                  <FolderPlusIcon />
+                </button>
+                <button
+                  type="button"
+                  className={cx(styles.toolButton, showHidden && styles.toolButtonOn)}
+                  aria-pressed={showHidden}
+                  aria-label={showHidden ? '隐藏以点开头的文件夹' : '显示以点开头的文件夹'}
+                  title={showHidden ? '隐藏点开头的文件夹' : '显示点开头的文件夹'}
+                  onClick={() => { setShowHidden(previous => !previous) }}
+                >
+                  <EyeIcon />
+                  {!showHidden && hiddenCount > 0 && <span className={styles.countBadge} aria-hidden>{hiddenCount}</span>}
+                </button>
+                <button
+                  type="button"
+                  className={styles.toolButton}
+                  aria-label="刷新当前目录"
+                  title="刷新"
+                  disabled={pane.loading || pane.listing === null}
+                  onClick={refreshCurrent}
+                >
+                  <RefreshIcon className={pane.loading ? styles.spin : undefined} />
+                </button>
+              </div>
+            </div>
 
-        <section className={styles.remoteSection} aria-label="远程连接">
-          <div className={styles.remoteHead}>
-            <h4 className={styles.remoteTitle}>
-              <ServerIcon className={styles.remoteTitleIcon} />
-              远程连接
-              {connections.length > 0 && <span className={styles.remoteCount}>{connections.length}</span>}
-            </h4>
-            <button type="button" className={styles.newRemote} onClick={() => { setFormOpen(true) }}>
-              <PlusIcon style={{ width: 12, height: 12 }} />
-              新建远程
-            </button>
-          </div>
+            <div
+              className={cx(styles.browser, pane.loading && pane.listing !== null && styles.browserBusy)}
+              aria-busy={pane.loading}
+            >
+              {pane.loading && pane.listing === null && (
+                <div className={styles.skeletons} role="status" aria-label="正在加载目录">
+                  {[52, 78, 64, 90, 45, 71].map((width, index) => (
+                    <div key={index} className={styles.skeleton} style={{ width: `${width}%` }} />
+                  ))}
+                </div>
+              )}
 
-          {connectionsLoading && (
-            <div role="status" aria-label="正在加载远程连接">
-              {[0, 1].map(index => (
-                <div key={index} className={styles.skeletonRow}>
-                  <div className={styles.skeletonDot} />
-                  <div className={styles.skeletonLines}>
-                    <div className={styles.skeletonLine} style={{ width: '38%' }} />
-                    <div className={styles.skeletonLine} style={{ width: '62%' }} />
+              {pane.error !== null && !pane.loading && (
+                <div className={styles.errorPanel} role="alert">
+                  <AlertIcon className={styles.errorIcon} />
+                  <div className={styles.errorBody}>
+                    <p className={styles.errorTitle}>
+                      {remoteFailure !== null ? remoteFailure.title : mode.kind === 'remote' ? '无法读取远程目录' : '无法读取目录'}
+                    </p>
+                    <p className={styles.errorText}>{remoteFailure !== null ? remoteFailure.text : pane.error}</p>
+                  </div>
+                  <div className={styles.errorActions}>
+                    {remoteFailure?.needsAuth === true && activeConnection !== undefined && (
+                      <button
+                        type="button"
+                        className={styles.retryButton}
+                        onClick={() => { openForm(draftFromConnection(activeConnection)) }}
+                      >
+                        <KeyIcon style={{ width: 12, height: 12 }} />
+                        补全认证
+                      </button>
+                    )}
+                    <button type="button" className={styles.retryButton} onClick={refreshCurrent}>
+                      <RefreshIcon style={{ width: 12, height: 12 }} />
+                      重试
+                    </button>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
+              )}
 
-          {connectionsError !== null && !connectionsLoading && (
-            <div className={styles.remoteError} role="alert">
-              <span className={styles.remoteErrorText}>{connectionsError}</span>
-              <button type="button" className={styles.retryButton} onClick={() => { void refreshConnections() }}>
-                <RefreshIcon style={{ width: 12, height: 12 }} />
-                重试
-              </button>
-            </div>
-          )}
+              {pane.listing !== null && visibleEntries.length === 0 && !pane.loading && pane.error === null && (
+                <div className={styles.emptyState}>
+                  <FolderIcon className={styles.emptyIcon} style={{ width: 22, height: 22 }} />
+                  <p className={styles.emptyTitle}>没有子文件夹</p>
+                  <p className={styles.emptyText}>
+                    {hiddenCount > 0 && !showHidden
+                      ? `另有 ${hiddenCount} 个点开头的文件夹未显示`
+                      : '可直接在此目录新建文件夹，或选择上方路径'}
+                  </p>
+                </div>
+              )}
 
-          {!connectionsLoading && connectionsError === null && connections.length === 0 && (
-            <div className={styles.remoteEmpty}>
-              <ServerIcon className={styles.remoteEmptyIcon} style={{ width: 18, height: 18 }} />
-              <p className={styles.remoteEmptyTitle}>还没有远程连接</p>
-              <p className={styles.remoteEmptyText}>新建一个 SSH 连接，即可浏览远程目录并创建远程会话。</p>
-            </div>
-          )}
+              {visibleEntries.length > 0 && (
+                <ul className={styles.entryList} role="list">
+                  {visibleEntries.map(entry => (
+                    <li key={entry.path}>
+                      <button
+                        type="button"
+                        className={cx(styles.entry, entry.hidden && styles.entryHidden)}
+                        onClick={() => {
+                          if (mode.kind === 'local') navigateLocal(entry.path)
+                          else navigateRemote(mode.id, entry.path)
+                        }}
+                      >
+                        <FolderIcon className={styles.entryIcon} />
+                        <span className={styles.entryName}>{entry.name}</span>
+                        <ChevronIcon className={styles.entryChevron} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
 
-          {!connectionsLoading && connections.length > 0 && (
-            <ul className={styles.connectionList} role="list">
-              {connections.map(connection => {
-                const active = mode.kind === 'remote' && mode.id === connection.id
-                return (
-                  <li key={connection.id} className={cx(styles.connectionItem, active && styles.connectionItemActive)}>
-                    <button
-                      type="button"
-                      className={styles.connectionMain}
-                      aria-current={active ? 'true' : 'false'}
-                      onClick={() => { navigateRemote(connection.id) }}
-                    >
-                      <ServerIcon className={styles.connectionIcon} />
-                      <span className={styles.connectionInfo}>
-                        <span className={styles.connectionLabel}>{connection.label}</span>
-                        <span className={styles.connectionDetail}>
-                          <span className={styles.connectionEndpoint}>
-                            {connection.username}@{connection.host}:{connection.port}
-                          </span>
-                          <span className={styles.badge}>
-                            {connection.auth === 'password' ? <LockIcon style={{ width: 11, height: 11 }} /> : <KeyIcon style={{ width: 11, height: 11 }} />}
-                            {connection.auth === 'password' ? '密码' : connection.auth === 'agent' ? 'Agent' : '私钥'}
-                          </span>
-                          {connection.jumpHosts.length > 0 && (
-                            <span className={styles.badge} title={connection.jumpHosts.join(' → ')}>
-                              <RouteIcon style={{ width: 11, height: 11 }} />
-                              跳板 ×{connection.jumpHosts.length}
-                            </span>
-                          )}
-                        </span>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      className={styles.connectionRemove}
-                      aria-label={`删除连接 ${connection.label}`}
-                      title="删除连接"
-                      onClick={() => { setDeleteTarget(connection) }}
-                    >
-                      <TrashIcon style={{ width: 14, height: 14 }} />
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
-          )}
-        </section>
+              {pane.listing?.truncated === true && (
+                <p className={styles.truncated}>文件夹过多，仅显示开头部分。</p>
+              )}
+            </div>
+          </div>
+        </div>
 
         <footer className={styles.footer}>
-          <button
-            type="button"
-            className={styles.button}
-            disabled={pane.listing === null || pane.loading || busy}
-            onClick={() => {
-              setFolderDraft('')
-              setFolderError(null)
-            }}
-          >
-            <FolderPlusIcon />
-            新建文件夹
-          </button>
-          <span className={styles.gap} />
           <button type="button" className={styles.button} disabled={busy} onClick={onCancel}>取消</button>
           <button
             type="button"
@@ -646,7 +968,8 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
           resolve={formResolve}
           test={formTest}
           save={formSave}
-          onClose={() => { setFormOpen(false) }}
+          draft={formDraft}
+          onClose={() => { setFormOpen(false); setFormDraft(undefined) }}
           onSaved={(view) => { void formSaved(view) }}
         />
       )}

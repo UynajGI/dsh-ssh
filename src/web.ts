@@ -238,6 +238,10 @@ export function apply(ctx: Context, config: WebChannelConfig): void {
     try {
       switch (endpoint) {
         case 'connections.list': return { ok: true, value: registry().list() }
+        case 'config.hosts': {
+          // Re-reads ~/.ssh/config on every call; wildcards stay hidden.
+          return { ok: true, value: registry().listConfigHosts() }
+        }
         case 'connections.resolve': {
           const input = requirePayload(payload, isRecord, 'connections.resolve')
           const host = input.host

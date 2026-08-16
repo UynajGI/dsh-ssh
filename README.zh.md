@@ -44,7 +44,7 @@ npm i dsh-ssh
 - id: ssh-remote
   name: dsh-ssh
   config:
-    host: 10.0.0.5            # 目标主机（必填）
+    host: server.example.com  # 目标主机（必填；也可用 ~/.ssh/config 别名，如 prod）
     port: 22
     username: root            # 必填
     privateKey: ~/.ssh/id_ed25519   # 私钥文件路径，或直接写 PEM 内容
@@ -53,7 +53,7 @@ npm i dsh-ssh
     cwd: /root/workspace           # 远程工作目录（必填，绝对 POSIX 路径）
     # --- 跳板链（可选，按序：先连第一个跳板，最后连目标）---
     jump:
-      - host: 47.xx.xx.1
+      - host: bastion.example.com
         # port: 22             # 缺省跟随目标机
         # username: ubuntu     # 缺省跟随目标机
         privateKey: ~/.ssh/id_ed25519
@@ -81,9 +81,31 @@ npm i dsh-ssh
 ## 界面上的「添加工作区」走 SSH（Web GUI）
 
 Web 界面的**添加工作区**流程（对话首屏的工作区选择器、侧边栏的工作区浏览）
-由 dsh-ssh 的客户端 UI 接管：上面保留本机目录浏览，下面列出**连接注册表**里
-的远程连接（可「＋ 新建远程」）。本机列表继续走 `ctx.directoryPicker` 的
-`browse` 能力；远程列表与连接管理走 dsh-ssh 自己的 `/dsh-ssh` RPC 通道。
+由 dsh-ssh 的客户端 UI 接管，布局为**左侧连接侧栏 + 右侧目录浏览**（VS Code
+Remote Explorer 式）：侧栏依次列出「SSH 配置主机」「已保存连接」和「本机目录」，
+右侧是与当前选中目标对应的目录浏览器。本机列表继续走 `ctx.directoryPicker`
+的 `browse` 能力；远程列表、连接管理与远程目录浏览走 dsh-ssh 自己的
+`/dsh-ssh` RPC 通道。
+
+### `~/.ssh/config` 主机直达（`config.hosts`）
+
+侧栏的「SSH 配置主机」分区由 `config.hosts` 端点驱动：每次打开对话框都会
+**重新读取**宿主机的 `~/.ssh/config`，列出其中的**精确 Host 别名**（通配符
+模式如 `*.example.com` 不列出），每个条目带解析出的 `user@host:port`、是否
+配置 IdentityFile、是否有 ProxyJump：
+
+- 点击一个别名：解析其完整配置（用户名、端口、私钥、跳板链）→ **自动注册
+  进连接注册表并直接进入该主机的目录浏览**，免表单（VS Code Remote-SSH 式）；
+  已注册过的别名标「已添加」，点击直接切换。
+- 别名未配置 `User`：不自动注册，而是打开**预填好的表单**（端口 / 私钥 /
+  跳板已填入），只需补用户名。
+- 别名未配置 `IdentityFile`：可以注册，但连接会在认证处失败——右栏会把
+  `All configured authentication methods failed` 翻译成可读提示，并提供
+  「补全认证」按钮打开预填表单。
+
+「新建连接」表单本身也是别名优先：主机字段填 `~/.ssh/config` 别名，失焦或
+粘贴时自动解析预填（「识别 ssh 配置」按钮保留为兜底），解析成功后表单内会
+显示一行摘要（别名 → user@host:port、私钥路径、跳板链）。
 
 选中远程目录后，客户端直接创建会话：
 
@@ -132,7 +154,7 @@ DSH 本地 workspace 注册表（见「已知限制」）。
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
 | `maxEntries` | number | 1000 | 单层目录行数上限（隐藏行计入；超出时 `truncated` 标记截断） |
-| `remoteLabel` | string | — | 保留字段：当前客户端流程不再使用钉住入口，远程入口在下方连接列表里 |
+| `remoteLabel` | string | — | 保留字段：当前客户端流程不再使用钉住入口，远程入口在左侧连接侧栏里 |
 
 `dsh-ssh/picker` 现在只承担 `ctx.directoryPicker` 的 browse 后端（Windows 上
 本机目录照常可用，POSIX 绝对路径走聚合 SSH 连接）。客户端 UI 的远程连接
@@ -181,7 +203,7 @@ DSH 本地 workspace 注册表（见「已知限制」）。
 | 远端下载 | fs provider 全套：read / streamText（流式解码）/ readBytes（限量）/ listDir / stat / lstat |
 | 远程命令 | subprocess provider：collect（tail 保留 + 本地 spill 文件）、pipe、inherit、批量 stdin |
 | 交互终端 | PTY（`spawnTerminal`），输入输出 + TERM→KILL 清理 |
-| 添加工作区 GUI | `dsh-ssh/picker`：directory-picker 接缝的 `browse` 后端（走 SFTP）——界面添加工作区对话框直接浏览远程主机（Windows 上钉入口） |
+| 添加工作区 GUI | `dsh-ssh/picker`：directory-picker 接缝的 `browse` 后端；客户端 UI 为左侧连接侧栏（`~/.ssh/config` 主机直达 + 已保存连接 + 本机）、右侧目录浏览 |
 | 环境隔离 | 远端登录环境 scrub（剔除 `DSH_*` 与凭据形变量）+ 显式 env 覆盖，`env -i` 启动 |
 | 并发安全 | fs 写操作按 targetKey 串行化（防并发写同一文件） |
 | 主机校验 | `strictHostKeyChecking` + `knownHosts`（SHA256 指纹或原始公钥） |

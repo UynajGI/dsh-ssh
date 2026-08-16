@@ -41,6 +41,21 @@ export interface SshConnectionView {
   jumpHosts: string[]
 }
 
+/** One exact `~/.ssh/config` Host alias as the sidebar lists it. */
+export interface SshConfigHostView {
+  /** The exact alias as spelled in the config (no wildcards). */
+  alias: string
+  /** The resolved HostName, or the alias when none is configured. */
+  host: string
+  /** The block's User; empty when the config does not specify one. */
+  username: string
+  port: number
+  /** Whether the block lists at least one IdentityFile. */
+  identityFile: boolean
+  /** Whether the block lists a ProxyJump chain. */
+  jump: boolean
+}
+
 /** One ProxyJump hop after `~/.ssh/config` resolution. */
 export interface ResolvedJump {
   host: string
@@ -151,6 +166,11 @@ function patternMatches(pattern: string, host: string): boolean {
   return pattern.toLowerCase() === host.toLowerCase()
 }
 
+/** An exact Host alias (no `*` / `?` wildcard, no `!` negation) listable in the UI. */
+function isExactAlias(pattern: string): boolean {
+  return pattern !== '' && !/[*?!]/.test(pattern)
+}
+
 /** Parse one `[user@]host[:port]` ProxyJump entry. */
 function parseJumpEntry(entry: string): { host: string; username?: string; port?: number } {
   let rest = entry
@@ -189,9 +209,9 @@ export class SshRegistry extends Service {
   })
 
   private readonly stateFile: string
+  private readonly sshConfigPath = join(homedir(), '.ssh', 'config')
   private readonly specs = new Map<string, SshConnectionSpec>()
   private readonly live = new Map<string, SshConnection>()
-  private readonly sshConfig = readSshConfig(join(homedir(), '.ssh', 'config'))
   private nextId = 1
   private writeTail: Promise<void> = Promise.resolve()
 
@@ -317,7 +337,47 @@ export class SshRegistry extends Service {
 
   /** Resolve a hostname (possibly a `~/.ssh/config` alias) into its effective config. */
   resolveSshConfig(host: string, depth = 0): ResolvedSshConfig {
-    const block = this.sshConfig.find(entry => entry.patterns.some(pattern => patternMatches(pattern, host)))?.block
+    return this.resolveAgainst(this.readConfigEntries(), host, depth)
+  }
+
+  /**
+   * List the exact `~/.ssh/config` Host aliases for the sidebar, re-reading the
+   * file on every call so edits between two openings are picked up. Wildcard
+   * and negated patterns stay hidden; each alias carries its resolved
+   * username/port plus IdentityFile / ProxyJump presence.
+   */
+  listConfigHosts(): SshConfigHostView[] {
+    const entries = this.readConfigEntries()
+    const seen = new Set<string>()
+    const hosts: SshConfigHostView[] = []
+    for (const entry of entries) {
+      for (const pattern of entry.patterns) {
+        if (!isExactAlias(pattern)) continue
+        const key = pattern.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        const resolved = this.resolveAgainst(entries, pattern, 0)
+        hosts.push({
+          alias: pattern,
+          host: resolved.host,
+          username: resolved.username,
+          port: resolved.port,
+          identityFile: resolved.privateKeyPaths.length > 0,
+          jump: resolved.jump.length > 0,
+        })
+      }
+    }
+    return hosts
+  }
+
+  /** Re-read `~/.ssh/config`; an absent or unreadable file reads as empty. */
+  private readConfigEntries(): Array<{ patterns: string[]; block: SshConfigBlock }> {
+    return readSshConfig(this.sshConfigPath)
+  }
+
+  /** Resolve against one fixed snapshot of the config (jump hops share it). */
+  private resolveAgainst(entries: Array<{ patterns: string[]; block: SshConfigBlock }>, host: string, depth: number): ResolvedSshConfig {
+    const block = entries.find(entry => entry.patterns.some(pattern => patternMatches(pattern, host)))?.block
     const resolved: ResolvedSshConfig = {
       host: block?.hostName ?? host,
       username: block?.user ?? '',
@@ -328,7 +388,7 @@ export class SshRegistry extends Service {
     if (depth < 8) {
       for (const entry of block?.proxyJump ?? []) {
         const hop = parseJumpEntry(entry)
-        const hopConfig = this.resolveSshConfig(hop.host, depth + 1)
+        const hopConfig = this.resolveAgainst(entries, hop.host, depth + 1)
         resolved.jump.push({
           host: hopConfig.host,
           port: hop.port ?? hopConfig.port,

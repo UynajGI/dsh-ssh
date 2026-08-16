@@ -6,27 +6,28 @@
     - id: ssh-remote
       name: dsh-ssh
       config:
-        host: 10.0.0.5
+        host: server.example.com   # 也可用 ~/.ssh/config 别名，如 prod
         port: 22
         username: root
         privateKey: ~/.ssh/id_ed25519
         cwd: /root/workspace
         jump:
-          - host: 47.xx.xx.1
+          - host: bastion.example.com
             username: ubuntu
             privateKey: ~/.ssh/id_ed25519
 
 # ── Web GUI 的「添加工作区」走远程目录（可选）────────────────────────────
-# dsh-ssh/picker 实现 directory-picker 能力接缝的 browse 后端：界面上
-# 「选择工作区目录」对话框直接浏览远程主机（SFTP）。
+# dsh-ssh/picker 实现 directory-picker 能力接缝的 browse 后端（本机目录）；
+# 界面上「选择工作区目录」对话框由 dsh-ssh 客户端接管为左右分栏：
+# 左侧连接侧栏（SSH 配置主机直达 + 已保存连接 + 本机目录），右侧目录浏览。
 #
 # 注意：补丁层的 name 是校验字段不是替换字段（名字对不上会跳过整条补丁），
 # 所以必须用 disabled 按 id 关掉部署里默认的 -auto 行（它动态挂载的界面会
 # 一起消失），再用自己的 id 插入 picker 和 dsh-ssh/web。
 #
-# Windows 主机：dsh-ssh 客户端会注册「上面本地目录 + 下面远程连接管理」的
-# 添加工作区流程；选中远程目录后以 ssh://<id>/<path> 作为会话 cwd 打开。
-# POSIX 主机：绝对路径都视为远程路径，选择器仅远程。
+# 侧栏「SSH 配置主机」来自 dsh-ssh/web 的 config.hosts 端点：每次打开都重读
+# 宿主机的 ~/.ssh/config，列出精确 Host 别名（通配符不列）；点击别名即解析、
+# 注册并直接进入该主机目录浏览；未配 User 的别名会打开预填好的表单。
 
 - id: directory-picker
   name: '@deepseek-ai/dsh-host-directory-picker-auto'
