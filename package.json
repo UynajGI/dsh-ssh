@@ -1,6 +1,6 @@
 {
   "name": "dsh-ssh",
-  "version": "0.2.3",
+  "version": "0.3.0-pre",
   "description": "SSH remote-execution plugin for DeepSeek Harness — ProxyJump chain, SFTP filesystem, subprocess and PTY over ssh2",
   "type": "module",
   "license": "MIT",
