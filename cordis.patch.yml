@@ -33,7 +33,11 @@
         maxEntries: 1000
 
     # 多连接注册表 + /dsh-ssh RPC（持久化、连接管理、远程目录浏览）
+    # inject 里的 webServer 是必需项：通道注册要在这条行自己的 fiber 上落到
+    # webServer 路由表，0.1.5 起 connection 服务不再替调用方注入它——缺了它
+    # 这条行在挂载期直接抛 `cannot get property "webServer" without inject`。
     - id: ssh-web-channel
       name: dsh-ssh/web
+      inject: [connection, webServer]
       config:
         maxEntries: 1000

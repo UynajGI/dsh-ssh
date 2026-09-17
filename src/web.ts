@@ -48,6 +48,17 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Host connection transport; the shared RPC channel registry lives here. */
     connection: {
+      /**
+       * Channel registration bound to an explicit owner context. Present on
+       * cores from 0.1.5 on; `rpc.handle` registers through a context that
+       * cannot reach `webServer` there, so prefer this entry point. See
+       * {@link registerChannel}.
+       */
+      register?(
+        owner: Context,
+        channel: string,
+        handler: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<ChannelResult>,
+      ): () => Promise<void>
       rpc: {
         handle(
           channel: string,
@@ -57,6 +68,32 @@ declare module '@deepseek-ai/cordis' {
       }
     }
   }
+}
+
+/** The absolute logical channel this plugin's unary endpoints ride on. */
+const CHANNEL = '/dsh-ssh'
+
+/**
+ * Register the unary channel on the shared web transport.
+ *
+ * `ctx.connection.rpc.handle()` scopes the registration to the context the
+ * service reads from, not the caller: on cores from 0.1.5 on that context no
+ * longer injects `webServer`, so the call throws `cannot get property
+ * "webServer" without inject` and the channel never mounts — every
+ * `/dsh-ssh` request then answers 404 while the mount itself looks healthy.
+ * Naming this row's context as the owner keeps the channel on a fiber where
+ * `webServer` resolves; cores that expose only `rpc.handle` keep the old path.
+ * @param ctx - the mounting web-channel context.
+ * @param dispatch - decoded endpoint handler.
+ * @returns asynchronous disposer removing the channel.
+ */
+function registerChannel(
+  ctx: Context,
+  dispatch: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<ChannelResult>,
+): () => Promise<void> {
+  const register = ctx.connection.register
+  if (register !== undefined) return register.call(ctx.connection, ctx, CHANNEL, dispatch)
+  return ctx.connection.rpc.handle(CHANNEL, dispatch, { authority: 'loopback' })
 }
 
 /** Required host service: the web transport that carries the RPC channel. */
@@ -333,6 +370,6 @@ export function apply(ctx: Context, config: WebChannelConfig): void {
     }
   }
 
-  const dispose = ctx.connection.rpc.handle('/dsh-ssh', dispatch, { authority: 'loopback' })
+  const dispose = registerChannel(ctx, dispatch)
   ctx.effect(() => dispose, 'dsh-ssh: /dsh-ssh rpc channel')
 }
