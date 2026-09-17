@@ -78,6 +78,52 @@ The aggregate row is equivalent to three subpath rows — mount them separately 
   name: dsh-ssh/fs             # ctx.fs remote provider (SFTP)
 ```
 
+### Web profile deployment: release the local `subprocess` / `fs` slots
+
+`subprocess` and `fs` are **single-slot** services (Cordis allows one provider
+per scope; a second registration throws inside its own fiber). The stock web
+profile mounts local providers that already own both slots:
+
+| Slot | Local holder (stock web row) | dsh-ssh provider |
+|---|---|---|
+| `subprocess` | `@deepseek-ai/dsh-subprocess-local` (row id `subprocess`) | `SshSubprocessRuntime` |
+| `fs` | `@deepseek-ai/dsh-fs-sandbox` (row id `fs-sandbox`) | `SshFileSystem` |
+
+The unreleased state misleads: the `ssh` service still registers (connections
+work, placeholder directories appear), but `ctx.subprocess` / `ctx.fs` stay
+local — a remote session's commands and file operations land on the harness
+host; the two provider rows read `failed` on the plugin page while the startup
+log stays clean. Release the slots in `$DSH_HOME/profiles/web/cordis.patch.yml`:
+
+```yaml
+# Hand the slots to the dsh-ssh remote providers
+- id: subprocess
+  name: '@deepseek-ai/dsh-subprocess-local'
+  disabled: true
+- id: fs-sandbox
+  name: '@deepseek-ai/dsh-fs-sandbox'
+  disabled: true
+
+# Windows hosts: the remote side is POSIX, so the pwsh tool would send
+# PowerShell syntax to it — switch to the bash tool.
+- id: bash-sandbox
+  name: '@deepseek-ai/dsh-bash-sandbox'
+  disabled: false
+- id: pwsh-sandbox
+  name: '@deepseek-ai/dsh-pwsh-sandbox'
+  disabled: true
+```
+
+What the swap costs:
+
+- Local writes lose their sandbox fence (the fence lives in
+  `SandboxedFileSystem`); the approval stack is unaffected.
+- A **local path** (Windows drive, UNC, relative) that is not an `ssh://` route
+  is redirected to the aggregate row's `cwd` by `resolveRemoteCwd`. This plugin
+  is a whole-swap design: one instance serves either local or remote
+  workspaces, not both — run two profiles (with and without this patch) to use
+  both worlds.
+
 ## Add-workspace over SSH (Web GUI)
 
 The Web surface's **Add workspace** flow (the conversation hero picker and the

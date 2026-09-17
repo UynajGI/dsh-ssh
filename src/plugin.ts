@@ -15,6 +15,13 @@ import SshFileSystem from './filesystem-final.ts'
 
 /**
  * Mount the aggregate plugin.
+ *
+ * The two providers claim the `subprocess` and `fs` slots. A deployment whose
+ * profile already provides those slots locally (the stock web profile mounts
+ * `@deepseek-ai/dsh-subprocess-local` and `@deepseek-ai/dsh-fs-sandbox`) must
+ * disable those rows first: a slot is single-owner, and a second provider fails
+ * inside its own fiber — the row keeps looking healthy while the remote world
+ * never appears. See the deployment section of the README.
  * @param ctx - the mounting Cordis context.
  * @param config - the shared SSH connection configuration.
  */
