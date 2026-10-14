@@ -3,9 +3,10 @@
  * sidebar (saved connections, `~/.ssh/config` hosts, local entry) beside the
  * directory browser. Registered into both directory-flow holes, so mounting
  * `dsh-ssh` composes the whole picking interaction. Cross-plane calls ride the
- * shared web transport: local listing through the `workspaces` service (the
- * Host's `directoryPicker` browse capability) and remote listing/connection
- * management through the package's `/dsh-ssh` RPC channel.
+ * shared web transport: local listing through the client's workspace directory
+ * service (`ctx.uiWorkspace` on DSH ≥ 0.2.0-rc.2, `ctx.workspaces` before that)
+ * and remote listing/connection management through the package's `/dsh-ssh` RPC
+ * channel.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -70,12 +71,40 @@ declare module '@deepseek-ai/cordis' {
       inject(key: string, callback: () => (() => void) | Iterable<() => void, void, void>): () => void
       register(options: { name: string; inject?: (...args: never[]) => Record<string, unknown> }, component: unknown): () => void
     }
-    workspaces: ClientWorkspaces
+    /** Client directory-picker bridge on DSH ≥ 0.2.0-rc.2. */
+    uiWorkspace?: ClientWorkspaces
+    /**
+     * Older DSH builds exposed the same directory faces on `workspaces`. DSH
+     * 0.2.0-rc.2 reuses that key for its workspace-controller face, so the
+     * capability is probed per call rather than trusted by name.
+     */
+    workspaces?: Partial<ClientWorkspaces>
   }
 }
 
-/** Required client services: the slot registry and the wire-facing workspace service. */
-export const inject = ['slots', 'workspaces']
+/**
+ * Required client service: the slot registry. The workspace directory service is
+ * resolved lazily because its key moved (`workspaces` → `uiWorkspace` in DSH
+ * 0.2.0-rc.2), and because the current `workspaces` key is a different service.
+ */
+export const inject = ['slots']
+
+/**
+ * The client service owning the directory-picker bridge
+ * (`listDirectory`/`createDirectory`).
+ * @param ctx - client root context.
+ * @returns the first registered service exposing both directory faces.
+ * @throws when no composed client service carries them.
+ */
+function directoryService(ctx: Context): ClientWorkspaces {
+  for (const name of ['uiWorkspace', 'workspaces'] as const) {
+    const service = ctx.get(name)
+    if (typeof service?.listDirectory === 'function' && typeof service.createDirectory === 'function') {
+      return service as ClientWorkspaces
+    }
+  }
+  throw new Error('dsh-ssh: no client workspace directory service is available (expected ctx.uiWorkspace)')
+}
 
 /**
  * Client plugin body: fill both directory-flow holes with the SSH workspace
@@ -85,8 +114,8 @@ export const inject = ['slots', 'workspaces']
  */
 export function apply(ctx: Context): void {
   const injected = (): Record<string, unknown> => ({
-    listLocalDirectory: (path?: string, signal?: AbortSignal) => ctx.workspaces.listDirectory(path, signal),
-    createLocalDirectory: (path: string, name: string) => ctx.workspaces.createDirectory(path, name),
+    listLocalDirectory: (path?: string, signal?: AbortSignal) => directoryService(ctx).listDirectory(path, signal),
+    createLocalDirectory: (path: string, name: string) => directoryService(ctx).createDirectory(path, name),
     rpc: (endpoint: string, payload?: unknown, signal?: AbortSignal) => {
       const connection = ctx.get('connection') as ClientConnection | undefined
       if (connection === undefined) {
