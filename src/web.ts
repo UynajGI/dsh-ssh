@@ -44,18 +44,26 @@ interface WireListing {
   truncated: boolean
 }
 
+/** One unary channel handler: endpoint, JSON payload, and the caller's lifetime. */
+type ChannelHandler = (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<ChannelResult>
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Host connection transport; the shared RPC channel registry lives here. */
     connection: {
       rpc: {
-        handle(
-          channel: string,
-          handler: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<ChannelResult>,
-          options: { authority: 'loopback' | 'trusted-host' },
-        ): () => Promise<void>
+        handle(channel: string, handler: ChannelHandler, options: { authority: 'loopback' | 'trusted-host' }): () => Promise<void>
       }
+      /**
+       * DSH ≥ 0.2.0-rc.2 channel registration, reached through `rpc.handle`. It
+       * reads `owner.webServer`, so `owner` must inject `webServer`; `rpc.handle`
+       * passes the connection plugin's own context instead and therefore throws
+       * (see {@link mountChannel}).
+       */
+      register?(owner: Context, channel: string, handler: ChannelHandler): () => Promise<void>
     }
+    /** The browser HTTP carrier; only its route registry is used here. */
+    webServer: { register(route: unknown): () => void }
   }
 }
 
@@ -333,6 +341,31 @@ export function apply(ctx: Context, config: WebChannelConfig): void {
     }
   }
 
-  const dispose = ctx.connection.rpc.handle('/dsh-ssh', dispatch, { authority: 'loopback' })
-  ctx.effect(() => dispose, 'dsh-ssh: /dsh-ssh rpc channel')
+  mountChannel(ctx, dispatch)
+}
+
+/**
+ * Mount the `/dsh-ssh` unary channel on the shared web transport.
+ *
+ * `ctx.connection.rpc.handle()` alone cannot carry the channel on DSH
+ * 0.2.0-rc.2. That build registers channels through
+ * `HostConnectionService#register(owner, channel, handler)` with `owner` fixed to
+ * the connection plugin's own context — the one whose `inject` list is
+ * `['credentials']` — so its `owner.webServer.register(route)` raises
+ * `cannot get property "webServer" without inject`, this row's fiber fails, and
+ * every `/dsh-ssh/<endpoint>` POST answers with the SPA fallback's HTTP 405.
+ * Registering through a context that injects `webServer` keeps DSH's own envelope
+ * handling and admission fence intact; `rpc.handle` stays as the fallback for the
+ * builds that expose only it.
+ * @param ctx - the mounting Cordis context.
+ * @param dispatch - the channel's endpoint dispatcher.
+ */
+function mountChannel(ctx: Context, dispatch: ChannelHandler): void {
+  const service = ctx.connection
+  ctx.inject(['webServer'], (webCtx) => {
+    const dispose = typeof service.register === 'function'
+      ? service.register.call(service, webCtx, '/dsh-ssh', dispatch)
+      : service.rpc.handle('/dsh-ssh', dispatch, { authority: 'loopback' })
+    webCtx.effect(() => dispose, 'dsh-ssh: /dsh-ssh rpc channel')
+  })
 }
