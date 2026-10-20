@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## 0.4.2 (2026-10-20)
+
+### Documentation
+
+* trim the READMEs around the dsh plugin install flow and show the add-workspace dialog as a rendered mock instead of prose ([caffe6a](https://github.com/UynajGI/dsh-ssh/commit/caffe6a))
+
 ## 0.4.1 (2026-10-20)
 
 ### Features
