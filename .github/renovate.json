@@ -1,0 +1,34 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["npm"],
+  "timezone": "Asia/Shanghai",
+  "schedule": ["before 8am"],
+  "dependencyDashboard": true,
+  "prConcurrentLimit": 1,
+  "rebaseWhen": "conflicted",
+  "packageRules": [
+    {
+      "description": "Only the DeepSeek Harness toolchain is tracked automatically.",
+      "matchPackageNames": ["**"],
+      "enabled": false
+    },
+    {
+      "description": "DSH packages publish prereleases under the next tag; npm latest is stale.",
+      "matchPackageNames": ["@deepseek-ai/dsh-*"],
+      "enabled": true,
+      "followTag": "next",
+      "ignoreUnstable": false,
+      "respectLatest": false,
+      "rangeStrategy": "bump",
+      "groupName": "dsh upstream"
+    },
+    {
+      "description": "Runtime peers that still publish a usable latest tag.",
+      "matchPackageNames": ["@deepseek-ai/cordis", "@deepseek-ai/schemastery"],
+      "enabled": true,
+      "rangeStrategy": "bump",
+      "groupName": "dsh upstream"
+    }
+  ]
+}

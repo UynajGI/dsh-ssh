@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The agent repair workflow re-dispatches CI after pushing to a Renovate PR.
+  workflow_dispatch:
 
 jobs:
   check:

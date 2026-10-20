@@ -2,3 +2,7 @@ node_modules
 *.log
 .DS_Store
 lib
+
+# Qwen Code CI settings and logs
+.qwen/
+qwen-artifacts/

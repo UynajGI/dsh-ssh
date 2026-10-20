@@ -1,0 +1,251 @@
+name: Agent fix (Renovate)
+
+# A failed CI run on a Renovate PR means the upstream DSH API changed under
+# the dependency bump. This workflow runs Qwen Code in the runner, adapts the
+# source, verifies typecheck/build, and pushes the repair back to the PR.
+# It never merges: the PR stays open for human review.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to repair
+        required: true
+        type: number
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: agent-fix-${{ github.event.workflow_run.id || inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'failure' &&
+       (github.event.workflow_run.event == 'pull_request' ||
+        github.event.workflow_run.event == 'workflow_dispatch'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Resolve the Renovate pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          INPUT_PR: ${{ inputs.pr }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_PR:-}" ]; then
+            PR="$INPUT_PR"
+          else
+            PR="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/pull_requests" --jq '.[0].number // empty')"
+            if [ -z "${PR:-}" ] && [ -n "${HEAD_BRANCH:-}" ]; then
+              PR="$(gh pr list --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number // empty')"
+            fi
+          fi
+          if [ -z "${PR:-}" ]; then
+            echo "No pull request is attached to this run; nothing to repair."
+            exit 0
+          fi
+          gh pr view "$PR" --json number,author,headRefName,isCrossRepository,labels > /tmp/pr.json
+          AUTHOR="$(jq -r '.author.login' /tmp/pr.json)"
+          BRANCH="$(jq -r '.headRefName' /tmp/pr.json)"
+          CROSS="$(jq -r '.isCrossRepository' /tmp/pr.json)"
+          LABELS="$(jq -r '.labels[].name' /tmp/pr.json | tr '\n' ' ')"
+          if [ "$AUTHOR" != "renovate[bot]" ] && [ "$AUTHOR" != "renovate" ] && [ "$AUTHOR" != "github-actions[bot]" ]; then
+            echo "PR #$PR is authored by $AUTHOR, not Renovate; skipping."
+            exit 0
+          fi
+          case "$BRANCH" in
+            renovate/*) ;;
+            *) echo "PR #$PR does not use a Renovate branch; skipping."; exit 0 ;;
+          esac
+          if [ "$CROSS" = "true" ]; then
+            echo "PR #$PR comes from a fork; refusing to run secrets on it."
+            exit 0
+          fi
+          case " $LABELS " in
+            *" agent-fix-attempted "*) echo "PR #$PR already had an agent attempt; skipping."; exit 0 ;;
+          esac
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the pull request branch
+        if: steps.pr.outputs.number != ''
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node
+        if: steps.pr.outputs.number != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.pr.outputs.number != ''
+        continue-on-error: true
+        run: npm ci
+
+      - name: Check the agent credentials
+        id: creds
+        if: steps.pr.outputs.number != ''
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+        run: |
+          set -euo pipefail
+          for name in LLM_API_KEY LLM_BASE_URL LLM_MODEL; do
+            if [ -z "${!name:-}" ]; then
+              echo "Set $name as a repository secret or variable before running the agent." >&2
+              exit 1
+            fi
+          done
+
+      - name: Run Qwen Code
+        id: qwen
+        if: steps.pr.outputs.number != '' && steps.creds.outcome == 'success'
+        uses: QwenLM/qwen-code-action@v1
+        with:
+          openai_api_key: ${{ secrets.LLM_API_KEY }}
+          openai_base_url: ${{ vars.LLM_BASE_URL }}
+          openai_model: ${{ vars.LLM_MODEL }}
+          qwen_cli_version: ${{ vars.QWEN_CLI_VERSION || '0.25.3' }}
+          workflow_name: 'agent-fix'
+          upload_artifacts: true
+          settings: |
+            {
+              "model": {
+                "maxSessionTurns": 80
+              }
+            }
+          prompt: |
+            You are repairing a Renovate dependency update in the dsh-ssh repository.
+            The pull request upgrades the DeepSeek Harness (DSH) packages to a new
+            prerelease, and TypeScript compilation fails because upstream interfaces
+            changed.
+
+            Goal: make `npm run typecheck` and `npm run build` pass again with minimal,
+            production-quality source changes.
+
+            Rules:
+            - Do not change dependency versions in package.json. The Renovate PR owns
+              version selection.
+            - Do not edit .github/ or any CI configuration.
+            - Do not use `any`, `@ts-ignore`, `@ts-expect-error`, or relax tsconfig to
+              silence errors.
+            - Read the installed type definitions under node_modules/@deepseek-ai/...
+              before changing code.
+            - Implement new abstract members with real SSH-backed behavior that
+              matches the surrounding code. Do not leave TODO stubs or throw
+              "not implemented" unless the upstream contract explicitly permits an
+              absent value.
+            - Keep the existing architecture: connection registry, transport routing,
+              and remote providers. Do not rewrite unrelated code.
+            - If an upstream change is genuinely ambiguous or needs a product
+              decision, stop and report the question instead of guessing.
+
+            Procedure:
+            1. If node_modules is missing, run `npm install` first.
+            2. Run `npm run typecheck` and read every error.
+            3. Inspect the relevant .d.ts files in node_modules.
+            4. Implement the fixes.
+            5. Re-run `npm run typecheck` and `npm run build` until both exit 0.
+            6. Summarize the upstream API changes and the files you changed.
+
+            Do not commit or push; the workflow verifies and pushes after you finish.
+
+      - name: Verify the repair
+        id: verify
+        if: steps.pr.outputs.number != ''
+        run: |
+          npm run typecheck
+          npm run build
+
+      - name: Push the repair
+        id: push
+        if: steps.pr.outputs.number != '' && steps.verify.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ steps.pr.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git add -A
+          git diff --cached --name-only > /tmp/changed.txt
+          if [ ! -s /tmp/changed.txt ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "The agent produced no source changes."
+            exit 0
+          fi
+          if grep -Eq '^(\.github/|package\.json$|tsconfig\.json$|tsdown\.config\.ts$)' /tmp/changed.txt; then
+            echo "The agent touched protected files; refusing to push:" >&2
+            cat /tmp/changed.txt >&2
+            exit 1
+          fi
+          if git grep -n -E '@ts-(ignore|expect-error)' -- '*.ts' '*.tsx'; then
+            echo "The agent suppressed a type error with @ts-ignore/@ts-expect-error; refusing to push." >&2
+            exit 1
+          fi
+          git config user.name "dsh-ssh agent"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(deps): adapt to the DSH prerelease update"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:${BRANCH}"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Mark the attempt
+        if: always() && steps.pr.outputs.number != '' && steps.qwen.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          gh label create agent-fix-attempted \
+            --color FBCA04 \
+            --description "The upgrade agent already tried this pull request" 2>/dev/null || true
+          gh pr edit "$PR" --add-label agent-fix-attempted
+
+      - name: Re-dispatch CI
+        if: always() && steps.pr.outputs.number != '' && steps.push.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ steps.pr.outputs.branch }}
+        run: gh workflow run ci.yml --ref "$BRANCH"
+
+      - name: Report on the pull request
+        if: always() && steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.pr.outputs.number }}
+          AGENT: ${{ steps.qwen.outcome }}
+          VERIFY: ${{ steps.verify.outcome }}
+          PUSH_OUTCOME: ${{ steps.push.outcome }}
+          PUSHED: ${{ steps.push.outputs.changed }}
+        run: |
+          if [ "$AGENT" = "skipped" ]; then
+            BODY="Agent did not run: the credentials or workflow setup is incomplete. Nothing was pushed."
+          elif [ "$AGENT" = "failure" ]; then
+            BODY="Qwen Code failed before producing a repair. See the workflow log and the uploaded artifacts; the agent will not retry this pull request automatically."
+          elif [ "$VERIFY" != "success" ]; then
+            BODY="Agent repair did not pass typecheck/build; nothing was pushed. The agent will not retry this pull request automatically."
+          elif [ "$PUSH_OUTCOME" = "failure" ]; then
+            BODY="Agent changes touched protected files or the push failed; nothing was pushed. See the workflow log."
+          elif [ "$PUSHED" = "true" ]; then
+            BODY="Agent repair pushed a new commit and re-dispatched CI. Please review the diff before merging."
+          else
+            BODY="Agent found no source changes needed; typecheck/build pass and CI has been re-dispatched."
+          fi
+          gh pr comment "$PR" --body "$BODY"

@@ -1,0 +1,49 @@
+name: Renovate
+
+# Self-hosted dependency tracking: the whole upgrade chain stays inside
+# GitHub Actions. Renovate opens the bump PR; if CI fails, the agent-fix
+# workflow repairs the source and asks for a human review.
+
+on:
+  schedule:
+    # 06:00 Asia/Shanghai; renovate.json also restricts itself to before 8am.
+    - cron: '0 22 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: renovate
+  cancel-in-progress: false
+
+jobs:
+  renovate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Renovate
+        uses: renovatebot/github-action@v46.3.9
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          configurationFile: .github/renovate.json
+
+      - name: Dispatch CI for open Renovate pull requests
+        # Pull requests created with GITHUB_TOKEN do not trigger pull_request
+        # workflows, so re-dispatch CI explicitly for their branches.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh pr list --state open --limit 50 \
+            --json headRefName,author \
+            --jq '.[] | select(.headRefName | startswith("renovate/")) | select(.author.login == "github-actions[bot]" or .author.login == "renovate[bot]") | .headRefName' |
+          while IFS= read -r branch; do
+            echo "Dispatching CI for ${branch}"
+            gh workflow run ci.yml --ref "$branch"
+          done
