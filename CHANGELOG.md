@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## 0.4.1 (2026-10-20)
+
+### Features
+
+* **client:** keep the workspace picker usable through transport drops — retain cached connections, hosts, and listings; mark them as cached; pause network actions; and silently repull on a fresh connection generation instead of surfacing raw `Failed to fetch` errors ([c74e17c](https://github.com/UynajGI/dsh-ssh/commit/c74e17c))
+
 ## 0.4.0 (2026-10-20)
 
 * ci: track DSH upstream and repair broken bumps with Qwen Code ([e3c357c](https://github.com/UynajGI/dsh-ssh/commit/e3c357c))
