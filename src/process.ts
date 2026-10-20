@@ -2,7 +2,7 @@
 
 import { Buffer } from 'node:buffer'
 import { PassThrough } from 'node:stream'
-import type { Readable, Writable } from 'node:stream'
+import type { Duplex, Readable, Writable } from 'node:stream'
 import type { ClientChannel } from 'ssh2'
 import type {
   SubprocessCollect,
@@ -48,6 +48,8 @@ export class SshSubprocessHandle implements SubprocessHandle {
   readonly stdin: Writable | undefined
   readonly stdout: Readable | undefined
   readonly stderr: Readable | undefined
+  /** The SSH channel has no local fd to hand back as a control pipe. */
+  readonly control: Duplex | undefined = undefined
   readonly collected: SubprocessHandle['collected']
   readonly done: Promise<SubprocessOutcome>
 

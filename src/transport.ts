@@ -15,7 +15,7 @@
  */
 
 import { homedir } from 'node:os'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { isAbsolute, join, posix, relative, resolve } from 'node:path'
 import type { Client, SFTPWrapper } from 'ssh2'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ExecOutcome, SshRuntime } from './runtime.ts'
@@ -71,7 +71,12 @@ export function sshRoutesRoot(): string {
 
 /** The local placeholder path of one registry route (created by `session.route`). */
 export function sshRoutePlaceholder(connectionId: string, remotePath: string): string {
-  const segments = remotePath.split('/').filter(segment => segment !== '')
+  if (!/^[A-Za-z0-9._-]+$/.test(connectionId)) {
+    throw new Error(`dsh-ssh: invalid connection id ${JSON.stringify(connectionId)}`)
+  }
+  // Normalize first: an absolute remote path clamps `..` at `/`, and the
+  // filter is a backstop so a placeholder can never leave its connection root.
+  const segments = posix.normalize(remotePath).split('/').filter(segment => segment !== '' && segment !== '..')
   return join(sshRoutesRoot(), connectionId, ...segments)
 }
 

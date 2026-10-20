@@ -4,6 +4,7 @@ import { PassThrough } from 'node:stream'
 import type { ClientChannel } from 'ssh2'
 import type {
   SubprocessOutcome,
+  SubprocessTerminalActivity,
   SubprocessTerminalForeground,
   SubprocessTerminalHandle,
   SubprocessTerminalSignal,
@@ -55,9 +56,20 @@ export class SshTerminalHandle implements SubprocessTerminalHandle {
     })
   }
 
+  /** @inheritdoc */
+  async resize(cols: number, rows: number): Promise<void> {
+    if (this.topLevelExited) throw new Error('terminal process has exited')
+    this.channel.setWindow(rows, cols, 0, 0)
+  }
+
   /** The SSH channel does not expose a foreground process group. */
   inspectForeground(): Promise<SubprocessTerminalForeground | undefined> {
     return Promise.resolve(undefined)
+  }
+
+  /** The SSH channel cannot observe remote shell jobs, so activity stays unknown. */
+  inspectActivity(): Promise<SubprocessTerminalActivity> {
+    return Promise.resolve({ state: 'unknown', revision: 0 })
   }
 
   /** @inheritdoc */

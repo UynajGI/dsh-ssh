@@ -231,6 +231,34 @@ export class SshFileSystem extends FileSystem {
     return bytes
   }
 
+  override async readByteRange(
+    target: FsTarget,
+    range: { offset: number; length: number },
+    signal?: AbortSignal,
+  ): Promise<Uint8Array> {
+    if (!Number.isInteger(range.offset) || range.offset < 0 || !Number.isInteger(range.length) || range.length < 0) {
+      throw new FsError(`cannot read "${target.displayPath}": range offset and length must be non-negative integers`, 'FS_IO_ERROR')
+    }
+    await this.requireRegular(target, signal)
+    assertNotAborted(signal, 'read')
+    if (range.length === 0) return new Uint8Array(0)
+    const route = this.routeTarget(target)
+    const sftp = await route.transport.getSftp()
+    try {
+      const data = await new Promise<Buffer>((resolve, reject) => {
+        const chunks: Buffer[] = []
+        const stream = sftp.createReadStream(route.path, { start: range.offset, end: range.offset + range.length - 1 })
+        stream.on('data', (chunk: Buffer | string) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+        stream.on('error', reject)
+        stream.on('end', () => resolve(Buffer.concat(chunks)))
+      })
+      assertNotAborted(signal, 'read')
+      return data.subarray(0, range.length)
+    } catch (error: unknown) {
+      throw mapError(error, 'read', target.displayPath, signal)
+    }
+  }
+
   override async streamText(target: FsTarget, signal?: AbortSignal): Promise<AsyncIterable<string>> {
     await this.requireRegular(target, signal)
     const route = this.routeTarget(target)

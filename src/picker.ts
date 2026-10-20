@@ -251,14 +251,13 @@ export class SshDirectoryPicker extends DirectoryPicker {
 
   private readonly config: ResolvedConfig
   private readonly localHome: string
-  private readonly remoteHomePromise: Promise<string>
+  private remoteHomePromise: Promise<string> | undefined
   private readonly browseCapability: DirectoryPickerBrowseCapability
 
   constructor(ctx: Context, config: Config) {
     super(ctx)
     this.config = config as ResolvedConfig
     this.localHome = homedir()
-    this.remoteHomePromise = this.resolveRemoteHome()
     this.browseCapability = {
       kind: 'browse',
       list: (path?: string, signal?: AbortSignal) => this.list(path, signal),
@@ -327,6 +326,9 @@ export class SshDirectoryPicker extends DirectoryPicker {
 
   /** Await the cached remote home. */
   private remoteHome(): Promise<string> {
+    // Lazy: DSH 0.2.x may construct this service while the `ssh` provider is
+    // still activating, and an early `ctx.ssh` read throws in an inactive context.
+    this.remoteHomePromise ??= this.resolveRemoteHome()
     return this.remoteHomePromise
   }
 

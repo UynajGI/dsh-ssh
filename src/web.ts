@@ -44,18 +44,26 @@ interface WireListing {
   truncated: boolean
 }
 
+/** One unary channel handler: endpoint, JSON payload, and the caller's lifetime. */
+type ChannelHandler = (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<ChannelResult>
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Host connection transport; the shared RPC channel registry lives here. */
     connection: {
       rpc: {
-        handle(
-          channel: string,
-          handler: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<ChannelResult>,
-          options: { authority: 'loopback' | 'trusted-host' },
-        ): () => Promise<void>
+        handle(channel: string, handler: ChannelHandler, options: { authority: 'loopback' | 'trusted-host' }): () => Promise<void>
       }
+      /**
+       * Channel registration bound to an explicit owner context. It reads
+       * `owner.webServer`, so `owner` must inject `webServer`; `rpc.handle`
+       * passes the connection plugin's own context instead and therefore throws
+       * on DSH ≥ 0.2.0-rc.2 (see {@link mountChannel}).
+       */
+      register?(owner: Context, channel: string, handler: ChannelHandler): () => Promise<void>
     }
+    /** The browser HTTP carrier; only its route registry is used here. */
+    webServer: { register(route: unknown): () => void }
   }
 }
 
@@ -254,8 +262,21 @@ export function apply(ctx: Context, config: WebChannelConfig): void {
   }
 
   const dispatch = async (endpoint: string, payload: unknown, signal: AbortSignal): Promise<ChannelResult> => {
+    const startedAt = Date.now()
     try {
-      switch (endpoint) {
+      const result = await dispatchInner(endpoint, payload, signal)
+      console.log(`[dsh-ssh] ${endpoint} -> ${result.ok ? 'ok' : `err ${result.error.code}`} in ${Date.now() - startedAt}ms`)
+      return result
+    } catch (error) {
+      const message = messageOf(error)
+      console.log(`[dsh-ssh] ${endpoint} -> throw in ${Date.now() - startedAt}ms: ${message}`)
+      const code = message.startsWith('bad-request:') ? 'bad-request' : 'connection-failed'
+      return wireError(code, message.replace(/^bad-request: /u, ''))
+    }
+  }
+
+  const dispatchInner = async (endpoint: string, payload: unknown, signal: AbortSignal): Promise<ChannelResult> => {
+    switch (endpoint) {
         case 'connections.list': return { ok: true, value: registry().list() }
         case 'config.hosts': {
           // Re-reads ~/.ssh/config on every call; wildcards stay hidden.
@@ -325,14 +346,35 @@ export function apply(ctx: Context, config: WebChannelConfig): void {
         }
         default:
           throw new Error(`bad-request: unknown endpoint ${JSON.stringify(endpoint)}`)
-      }
-    } catch (error) {
-      const message = messageOf(error)
-      const code = message.startsWith('bad-request:') ? 'bad-request' : 'connection-failed'
-      return wireError(code, message.replace(/^bad-request: /u, ''))
     }
   }
 
-  const dispose = ctx.connection.rpc.handle('/dsh-ssh', dispatch, { authority: 'loopback' })
-  ctx.effect(() => dispose, 'dsh-ssh: /dsh-ssh rpc channel')
+  mountChannel(ctx, dispatch)
+}
+
+/**
+ * Mount the `/dsh-ssh` unary channel on the shared web transport.
+ *
+ * `ctx.connection.rpc.handle()` alone cannot carry the channel on DSH
+ * 0.2.0-rc.2: it registers through the connection plugin's own context, whose
+ * `inject` list does not contain `webServer`, so route registration raises
+ * `cannot get property "webServer" without inject`. Registering through a
+ * context that injects `webServer` keeps DSH's own envelope handling and
+ * admission fence intact; `rpc.handle` stays as the fallback for builds that
+ * expose only it.
+ * @param ctx - the mounting Cordis context.
+ * @param dispatch - the channel's endpoint dispatcher.
+ */
+function mountChannel(ctx: Context, dispatch: ChannelHandler): void {
+  const service = ctx.connection
+  ctx.inject(['webServer'], (webCtx) => {
+    if (typeof service.register === 'function') {
+      service.register(webCtx, '/dsh-ssh', dispatch)
+      return
+    }
+    webCtx.effect(
+      () => service.rpc.handle('/dsh-ssh', dispatch, { authority: 'loopback' }),
+      'dsh-ssh: /dsh-ssh rpc channel',
+    )
+  })
 }

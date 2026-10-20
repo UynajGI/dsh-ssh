@@ -13,11 +13,13 @@ import { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import type {
   SubprocessHandle,
   SubprocessSpawnSpec,
+  SubprocessTerminalEnvironment,
   SubprocessTerminalHandle,
   SubprocessTerminalSpawnSpec,
 } from '@deepseek-ai/dsh-subprocess'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { quoteShellArg } from './runtime.ts'
+import { readRemoteEnvironment } from './environment.ts'
 import { resolveSshCwd } from './transport.ts'
 import { SshSubprocessHandle } from './process.ts'
 import { spawnSshTerminal } from './terminal.ts'
@@ -101,6 +103,22 @@ export class SshSubprocessRuntime extends SubprocessRuntime {
       throw new Error(`subprocess-ssh: executable ${JSON.stringify(command)} did not resolve to one absolute path`)
     }
     return posix.isAbsolute(executable) ? executable : posix.resolve(this.ctx.ssh.cwd, executable)
+  }
+
+  /** @inheritdoc */
+  async terminalEnvironment(signal?: AbortSignal): Promise<SubprocessTerminalEnvironment> {
+    signal?.throwIfAborted()
+    let defaultShell: string | undefined
+    try {
+      const environment = await readRemoteEnvironment(this.ctx.ssh)
+      const shell = environment.SHELL
+      if (shell !== undefined && shell.trim() !== '') defaultShell = shell
+    } catch {
+      // The login environment may be unreadable before the first connection;
+      // the remote platform is still known.
+    }
+    signal?.throwIfAborted()
+    return { platform: 'posix', ...(defaultShell !== undefined ? { defaultShell } : {}) }
   }
 
   /** @inheritdoc */

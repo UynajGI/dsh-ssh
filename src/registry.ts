@@ -119,6 +119,15 @@ function expandHome(path: string): string {
   return path
 }
 
+/** Strip one matched pair of surrounding quotes, as OpenSSH accepts for values. */
+function unquote(value: string): string {
+  if (value.length >= 2) {
+    const quote = value[0]
+    if ((quote === '"' || quote === "'") && value.at(-1) === quote) return value.slice(1, -1)
+  }
+  return value
+}
+
 /** Read and parse `~/.ssh/config` into pattern → block entries. */
 function readSshConfig(path: string): Array<{ patterns: string[]; block: SshConfigBlock }> {
   const entries: Array<{ patterns: string[]; block: SshConfigBlock }> = []
@@ -135,7 +144,7 @@ function readSshConfig(path: string): Array<{ patterns: string[]; block: SshConf
       const line = rawLine.trim()
       if (line.length === 0 || line.startsWith('#')) continue
       const [keyword, ...rest] = line.split(/\s+/)
-      const value = rest.join(' ').trim()
+      const value = unquote(rest.join(' ').trim())
       if (keyword === undefined || value === '') continue
       const key = keyword.toLowerCase()
       if (key === 'host') {
