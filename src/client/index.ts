@@ -58,14 +58,31 @@ export interface ClientWorkspaces {
   createDirectory(path: string, name: string): Promise<string>
 }
 
+/** Transport recovery lifecycle exposed by DSH ≥ 0.2.x. */
+export type ConnectionState = 'connected' | 'connecting' | 'disconnected'
+
+/** Observable recovery state of the shared client transport. */
+export interface ConnectionStateSource {
+  getSnapshot(): ConnectionState | undefined
+  subscribe(listener: () => void): () => void
+}
+
 /** The client connection handle's RPC face. */
 export interface ClientConnection {
   rpc: {
     call(channel: string, endpoint: string, payload: unknown, signal?: AbortSignal): Promise<WireResult>
   }
+  /** Recovery lifecycle; older clients expose only `rpc`. */
+  state?: ConnectionStateSource
+  /** Reset retry progression and replace the current attempt immediately. */
+  reconnect?(): void
 }
 
 declare module '@deepseek-ai/cordis' {
+  interface Events {
+    /** A fresh connection generation was established; wire-derived caches must repull. */
+    'connection/reset'(): void
+  }
   interface Context {
     slots: {
       inject(key: string, callback: () => (() => void) | Iterable<() => void, void, void>): () => void
@@ -113,17 +130,22 @@ function directoryService(ctx: Context): ClientWorkspaces {
  * @param ctx - client root context.
  */
 export function apply(ctx: Context): void {
-  const injected = (): Record<string, unknown> => ({
-    listLocalDirectory: (path?: string, signal?: AbortSignal) => directoryService(ctx).listDirectory(path, signal),
-    createLocalDirectory: (path: string, name: string) => directoryService(ctx).createDirectory(path, name),
-    rpc: (endpoint: string, payload?: unknown, signal?: AbortSignal) => {
-      const connection = ctx.get('connection') as ClientConnection | undefined
-      if (connection === undefined) {
-        return Promise.resolve({ ok: false, error: { code: 'internal', message: 'dsh-ssh: the web transport is not available' } } as WireResult)
-      }
-      return connection.rpc.call('/dsh-ssh', endpoint, payload ?? {}, signal)
-    },
-  })
+  const injected = (): Record<string, unknown> => {
+    const connection = ctx.get('connection') as ClientConnection | undefined
+    return {
+      listLocalDirectory: (path?: string, signal?: AbortSignal) => directoryService(ctx).listDirectory(path, signal),
+      createLocalDirectory: (path: string, name: string) => directoryService(ctx).createDirectory(path, name),
+      connection,
+      subscribeConnectionReset: (listener: () => void) => ctx.on('connection/reset', listener),
+      rpc: (endpoint: string, payload?: unknown, signal?: AbortSignal) => {
+        const live = ctx.get('connection') as ClientConnection | undefined
+        if (live === undefined) {
+          return Promise.resolve({ ok: false, error: { code: 'internal', message: 'dsh-ssh: the web transport is not available' } } as WireResult)
+        }
+        return live.rpc.call('/dsh-ssh', endpoint, payload ?? {}, signal)
+      },
+    }
+  }
   ctx.slots.inject('conversation.hero.workspace.directoryFlow', () =>
     ctx.slots.inject('sidebar.workspaces.directoryFlow', function* () {
       yield ctx.slots.register({

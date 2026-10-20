@@ -79,6 +79,8 @@ export interface ConnectionFormProps {
   save(input: ConnectionInputWire): Promise<{ ok: boolean; message?: string; view?: ConnectionView }>
   /** Prefilled fields, when the sidebar opened the form for one config host. */
   draft?: ConnectionDraft | undefined
+  /** The shared transport is reconnecting: network actions are paused. */
+  locked?: boolean
   /** The operator dismissed the form. */
   onClose(): void
   /** A connection was saved; the flow switches the browser to it. */
@@ -145,7 +147,7 @@ interface FieldErrors {
 }
 
 /** The connection form modal (masked password, 密码/私钥二选一). */
-export function ConnectionForm({ resolve, test, save, draft, onClose, onSaved }: ConnectionFormProps) {
+export function ConnectionForm({ resolve, test, save, draft, locked, onClose, onSaved }: ConnectionFormProps) {
   const [label, setLabel] = useState(draft?.label ?? '')
   const [host, setHost] = useState(draft?.host ?? '')
   const [port, setPort] = useState(draft?.port ?? '22')
@@ -229,7 +231,7 @@ export function ConnectionForm({ resolve, test, save, draft, onClose, onSaved }:
    */
   const autoResolve = async (value: string): Promise<void> => {
     const hostText = value.trim()
-    if (hostText === '' || busyRef.current) return
+    if (hostText === '' || busyRef.current || locked === true) return
     if (lastAutoHost.current === hostText) return
     lastAutoHost.current = hostText
     const current = autoGeneration.current += 1
@@ -524,11 +526,11 @@ export function ConnectionForm({ resolve, test, save, draft, onClose, onSaved }:
         )}
 
         <div className={styles.formActions}>
-          <button type="button" className={styles.button} disabled={busy} onClick={() => { void resolveConfig() }}>
+          <button type="button" className={styles.button} disabled={busy || locked === true} onClick={() => { void resolveConfig() }}>
             <SparkIcon />
             识别 ssh 配置
           </button>
-          <button type="button" className={styles.button} disabled={busy} onClick={() => { void runTest() }}>
+          <button type="button" className={styles.button} disabled={busy || locked === true} onClick={() => { void runTest() }}>
             <RouteIcon />
             测试连接
           </button>
@@ -537,7 +539,7 @@ export function ConnectionForm({ resolve, test, save, draft, onClose, onSaved }:
           <button
             type="button"
             className={cx(styles.button, styles.primary)}
-            disabled={busy}
+            disabled={busy || locked === true}
             onClick={() => { void runSave() }}
           >
             {busyTask === 'save' && <SpinnerIcon className={styles.spin} />}

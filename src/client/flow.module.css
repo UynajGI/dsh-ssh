@@ -46,6 +46,9 @@
   --dshssh-danger-text: color-mix(in srgb, var(--dshssh-danger) 55%, var(--dshssh-fg));
   --dshssh-success-text: #93cf9c;
   --dshssh-success-text: color-mix(in srgb, var(--dshssh-success) 45%, var(--dshssh-fg));
+  --dshssh-warn: #d9a34a;
+  --dshssh-warn-text: #e3bd7c;
+  --dshssh-warn-soft: rgba(217, 163, 74, 0.11);
 }
 
 @media (prefers-color-scheme: light) {
@@ -84,6 +87,9 @@
     --dshssh-danger-text: color-mix(in srgb, var(--dshssh-danger) 55%, var(--dshssh-fg));
     --dshssh-success-text: #1d6b33;
     --dshssh-success-text: color-mix(in srgb, var(--dshssh-success) 45%, var(--dshssh-fg));
+    --dshssh-warn: #a86f12;
+    --dshssh-warn-text: #8a5a10;
+    --dshssh-warn-soft: rgba(168, 111, 18, 0.1);
   }
 }
 
@@ -218,6 +224,7 @@
 /* ---------- main dialog ---------- */
 
 .dialog {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: min(920px, 100%);
@@ -1241,5 +1248,226 @@
 
   .footer {
     flex-wrap: wrap;
+  }
+}
+
+/* ---------- connection recovery ---------- */
+
+.connProgress {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  opacity: 0;
+  background: transparent;
+  transition: opacity 0.2s ease;
+  z-index: 2;
+}
+
+.dialog[data-connection="connecting"] .connProgress {
+  opacity: 1;
+  background: linear-gradient(90deg, transparent, var(--dshssh-accent), transparent);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: dshssh-progress 1.3s linear infinite;
+}
+
+.dialog[data-connection="reconnecting"] .connProgress {
+  opacity: 1;
+  background: linear-gradient(90deg, transparent, var(--dshssh-warn), transparent);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: dshssh-progress 1.8s linear infinite;
+}
+
+.dialog[data-connection="recovered"] .connProgress {
+  opacity: 1;
+  background: var(--dshssh-success);
+}
+
+@keyframes dshssh-progress {
+  from { background-position: -40% 0; }
+  to { background-position: 140% 0; }
+}
+
+.connPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  height: 25px;
+  margin-top: 1px;
+  padding: 0 9px;
+  border: 1px solid var(--dshssh-border);
+  border-radius: 999px;
+  background: var(--dshssh-surface-2);
+  color: var(--dshssh-fg-muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-2px);
+  transition: opacity 0.18s ease, transform 0.18s ease, color 0.18s ease,
+    border-color 0.18s ease, background 0.18s ease;
+}
+
+.dialog[data-connection="connecting"] .connPill,
+.dialog[data-connection="reconnecting"] .connPill,
+.dialog[data-connection="recovered"] .connPill {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+}
+
+.dialog[data-connection="connecting"] .connPill {
+  color: #aebcf9;
+  border-color: color-mix(in srgb, var(--dshssh-accent) 32%, transparent);
+  background: var(--dshssh-accent-soft);
+}
+
+.dialog[data-connection="reconnecting"] .connPill {
+  color: var(--dshssh-warn-text);
+  border-color: color-mix(in srgb, var(--dshssh-warn) 34%, transparent);
+  background: var(--dshssh-warn-soft);
+}
+
+.dialog[data-connection="recovered"] .connPill {
+  color: var(--dshssh-success-text);
+  border-color: color-mix(in srgb, var(--dshssh-success) 32%, transparent);
+  background: var(--dshssh-success-soft);
+}
+
+.pillIcon {
+  width: 11px;
+  height: 11px;
+}
+
+.pillDot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+  animation: dshssh-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes dshssh-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
+.subtitleStale {
+  color: var(--dshssh-warn-text);
+}
+
+.linkButton {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--dshssh-accent);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.linkButton:hover {
+  filter: brightness(1.15);
+}
+
+.cacheTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 2px;
+  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, var(--dshssh-warn) 26%, transparent);
+  border-radius: 4px;
+  background: var(--dshssh-warn-soft);
+  color: var(--dshssh-warn-text);
+  font-size: 9.5px;
+  font-weight: 500;
+  line-height: 15px;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.cacheTag svg {
+  width: 9px;
+  height: 9px;
+}
+
+.footerHint {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--dshssh-fg-subtle);
+  font-size: 11.5px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.errorDetails {
+  margin-top: 6px;
+  color: var(--dshssh-fg-subtle);
+  font-size: 11px;
+}
+
+.errorDetails summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.errorDetails code {
+  display: block;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  background: var(--dshssh-surface-inset);
+  color: var(--dshssh-fg-muted);
+  font-family: var(--font-mono, ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace);
+  font-size: 10.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.connectionMain:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.connectionMain:disabled:hover {
+  background: transparent;
+}
+
+.connectionRemove:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.sidebarAdd:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: none;
+}
+
+.entry:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.entry:disabled:hover {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connProgress,
+  .pillDot {
+    animation: none !important;
   }
 }
