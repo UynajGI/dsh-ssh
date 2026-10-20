@@ -78,6 +78,49 @@ npm i dsh-ssh
   name: dsh-ssh/fs             # ctx.fs 远程 provider（SFTP）
 ```
 
+### Web profile 部署：让出本机 `subprocess` / `fs` 槽位
+
+`subprocess` 与 `fs` 都是**单槽位**服务（Cordis 每个作用域只允许一个 provider，
+第二个注册会在它自己的 fiber 里抛错）。Web 包默认挂载的本机 provider 会占住
+这两个槽位：
+
+| 槽位 | 本机持有者（Web 包默认行） | dsh-ssh 提供者 |
+|---|---|---|
+| `subprocess` | `@deepseek-ai/dsh-subprocess-local`（行 id `subprocess`） | `SshSubprocessRuntime` |
+| `fs` | `@deepseek-ai/dsh-fs-sandbox`（行 id `fs-sandbox`） | `SshFileSystem` |
+
+失败时的表现很容易误判：`ssh` 服务照常注册（连接是通的、占位目录也建得出来），
+但 `ctx.subprocess` / `ctx.fs` 可能仍是本机实现——远程会话的命令与文件操作会落到
+本机；落败的 provider 行在插件页里显示 failed，而启动日志里没有报错。最终谁赢
+取决于激活顺序。要让远程 provider 稳定接管，在
+`$DSH_HOME/profiles/web/cordis.patch.yml` 里释放槽位：
+
+```yaml
+# 让出槽位给 dsh-ssh 的远程 provider
+- id: subprocess
+  name: '@deepseek-ai/dsh-subprocess-local'
+  disabled: true
+- id: fs-sandbox
+  name: '@deepseek-ai/dsh-fs-sandbox'
+  disabled: true
+
+# Windows 主机：让位后 subprocess 已是远端 POSIX，pwsh 工具会把 PowerShell
+# 语法发到远端（必失败），换成 bash 工具。
+- id: bash-sandbox
+  name: '@deepseek-ai/dsh-bash-sandbox'
+  disabled: false
+- id: pwsh-sandbox
+  name: '@deepseek-ai/dsh-pwsh-sandbox'
+  disabled: true
+```
+
+让位后的取舍（务必知悉）：
+
+- 本机文件写入不再有沙箱围栏（围栏实现在 `SandboxedFileSystem` 内）；审批栈不受影响。
+- 非 `ssh://` 路由的**本机路径**（Windows 盘符、UNC、相对路径）由 `resolveRemoteCwd`
+  重定向到聚合行的 `cwd`。本插件按"整体替换"设计：同一实例里本机工作区与远程
+  工作区不能混用，想两边都用请用两套启动形态（带 / 不带本让位补丁）。
+
 ## 界面上的「添加工作区」走 SSH（Web GUI）
 
 Web 界面的**添加工作区**流程（对话首屏的工作区选择器、侧边栏的工作区浏览）
