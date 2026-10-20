@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
-## 0.3.0 (2026-10-20)
+## 0.4.0 (2026-10-20)
 
 * ci: track DSH upstream and repair broken bumps with Qwen Code ([e3c357c](https://github.com/UynajGI/dsh-ssh/commit/e3c357c))
 * feat: multi-connection SSH registry with remote workspace UI ([b819a71](https://github.com/UynajGI/dsh-ssh/commit/b819a71))
