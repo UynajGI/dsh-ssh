@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## 0.4.3 (2026-10-20)
+
+### Features
+
+* **client:** filter and keyboard-navigate the directory picker — toolbar filter for the current listing, roving focus across folder rows, an up-one-level button, and a labeled new-connection action ([814f294](https://github.com/UynajGI/dsh-ssh/commit/814f294))
+
+### Bug Fixes
+
+* **engines:** drop the `dsh` upper bound so the plugin manager accepts newer DSH hosts ([1e56063](https://github.com/UynajGI/dsh-ssh/commit/1e56063))
+
 ## 0.4.2 (2026-10-20)
 
 ### Documentation
