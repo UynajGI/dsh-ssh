@@ -180,6 +180,23 @@ export function SparkIcon(props: IconProps) {
   )
 }
 
+export function SearchIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="7" cy="7" r="4.25" />
+      <path d="M10.25 10.25l3 3" />
+    </svg>
+  )
+}
+
+export function ArrowUpIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M8 12.75V3.25M4.5 6.75 8 3.25l3.5 3.5" />
+    </svg>
+  )
+}
+
 export function SpinnerIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>

@@ -9,12 +9,14 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type { ClientConnection, ConfigHostView, ConnectionState, ConnectionView, WireEntry, WireListing, WireResult } from './index.ts'
 import { ConnectionForm } from './form.tsx'
 import type { ConnectionDraft, ConnectionInputWire, ResolvedSshConfigView } from './form.tsx'
 import { cx, useDialogA11y } from './ui.ts'
 import {
   AlertIcon,
+  ArrowUpIcon,
   CheckIcon,
   ChevronIcon,
   ClockIcon,
@@ -29,6 +31,7 @@ import {
   PlusIcon,
   RefreshIcon,
   RouteIcon,
+  SearchIcon,
   ServerIcon,
   SpinnerIcon,
   TrashIcon,
@@ -324,6 +327,7 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
   const [folderBusy, setFolderBusy] = useState(false)
   const [folderError, setFolderError] = useState<string | null>(null)
   const [showHidden, setShowHidden] = useState(false)
+  const [filter, setFilter] = useState('')
   const [nativePicking, setNativePicking] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<ConnectionView | null>(null)
   const [removingId, setRemovingId] = useState<string | null>(null)
@@ -338,6 +342,8 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
   modeRef.current = mode
   const paneRef = useRef<Pane>(pane)
   paneRef.current = pane
+  const searchRef = useRef<HTMLInputElement | null>(null)
+  const entryRefs = useRef<Array<HTMLButtonElement | null>>([])
 
   const hasData = connections.length > 0 || configHosts.length > 0 || pane.listing !== null
   const initialLoading = (connectionsLoading && connections.length === 0)
@@ -390,11 +396,13 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
   }
 
   const navigateLocal = (path?: string): void => {
+    if (modeRef.current.kind !== 'local' || path !== paneRef.current.path) setFilter('')
     setMode({ kind: 'local' })
     void loadLevel(signal => listLocalDirectory(path, signal))
   }
 
   const navigateRemote = (id: string, path?: string): void => {
+    if (modeRef.current.kind !== 'remote' || modeRef.current.id !== id || path !== paneRef.current.path) setFilter('')
     setMode({ kind: 'remote', id })
     void loadLevel(async signal => asListing(unwrap(await rpc('browse.list', { id, ...(path !== undefined ? { path } : {}) }, signal), 'browse.list failed')))
   }
@@ -501,6 +509,7 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
     setHostError(null)
     setConfirmTarget(null)
     setNativePicking(false)
+    setFilter('')
     setMode({ kind: 'local' })
     void refreshConnections()
     void refreshConfigHosts()
@@ -756,6 +765,10 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
 
   const hiddenCount = (pane.listing?.entries ?? []).filter(entry => entry.hidden).length
   const visibleEntries = (pane.listing?.entries ?? []).filter(entry => showHidden || !entry.hidden)
+  const normalizedFilter = filter.trim().toLowerCase()
+  const filteredEntries = normalizedFilter === ''
+    ? visibleEntries
+    : visibleEntries.filter(entry => entry.name.toLowerCase().includes(normalizedFilter))
   const home = pane.listing?.home ?? ''
   const crumbs = pane.listing?.crumbs ?? []
   const lastCrumbIndex = crumbs.length - 1
@@ -786,6 +799,43 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
         : pane.path === null
           ? '选择目录后创建会话'
           : `将使用 ${pane.path}`
+
+  /** The ancestor one level up (undefined at a filesystem root). */
+  const parentCrumb = crumbs.length >= 2 ? crumbs[crumbs.length - 2] : undefined
+
+  const goUp = (): void => {
+    if (parentCrumb === undefined) return
+    if (mode.kind === 'local') navigateLocal(parentCrumb.path)
+    else navigateRemote(mode.id, parentCrumb.path)
+  }
+
+  const focusEntry = (index: number): void => {
+    entryRefs.current[index]?.focus()
+  }
+
+  /** Roving focus for the folder list: arrows, Home/End; Enter stays native. */
+  const onEntryKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number): void => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      focusEntry(Math.min(index + 1, filteredEntries.length - 1))
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      focusEntry(Math.max(index - 1, 0))
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      focusEntry(0)
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      focusEntry(filteredEntries.length - 1)
+    }
+  }
+
+  const onSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'ArrowDown' && filteredEntries.length > 0) {
+      event.preventDefault()
+      focusEntry(0)
+    }
+  }
 
   /** The translated remote failure for the right pane, when there is one. */
   const paneBusinessError = pane.error !== null && !isTransportError(pane.error)
@@ -893,7 +943,7 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
                 <div className={styles.sideEmpty}>
                   <ServerIcon className={styles.sideEmptyIcon} style={{ width: 18, height: 18 }} />
                   <p className={styles.sideEmptyTitle}>还没有保存的连接</p>
-                  <p className={styles.sideEmptyText}>点右下角「＋」新建，或从下方 SSH 配置主机一键添加。</p>
+                  <p className={styles.sideEmptyText}>点下方「新建连接」，或从 SSH 配置主机一键添加。</p>
                 </div>
               )}
 
@@ -1063,12 +1113,23 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
               onClick={() => { openForm() }}
             >
               <PlusIcon style={{ width: 14, height: 14 }} />
+              新建连接
             </button>
           </nav>
 
           <div className={styles.main}>
             <div className={styles.toolbar}>
               <nav className={styles.crumbs} aria-label="当前路径">
+                <button
+                  type="button"
+                  className={styles.crumb}
+                  aria-label="上一级"
+                  title="上一级"
+                  disabled={locked || pane.loading || parentCrumb === undefined}
+                  onClick={goUp}
+                >
+                  <ArrowUpIcon style={{ width: 13, height: 13, verticalAlign: '-2px' }} />
+                </button>
                 <button
                   type="button"
                   className={styles.crumb}
@@ -1104,6 +1165,29 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
                 )}
                 {connectionUi.stale && <span className={styles.cacheTag}><ClockIcon />缓存</span>}
               </nav>
+              <div className={styles.searchBox} role="search">
+                <SearchIcon className={styles.searchIcon} />
+                <input
+                  ref={searchRef}
+                  className={styles.searchInput}
+                  value={filter}
+                  placeholder="过滤当前目录"
+                  aria-label="过滤当前目录"
+                  disabled={locked || pane.listing === null}
+                  onChange={event => { setFilter(event.target.value) }}
+                  onKeyDown={onSearchKeyDown}
+                />
+                {filter !== '' && (
+                  <button
+                    type="button"
+                    className={styles.searchClear}
+                    aria-label="清除过滤"
+                    onClick={() => { setFilter(''); searchRef.current?.focus() }}
+                  >
+                    <CloseIcon />
+                  </button>
+                )}
+              </div>
           <div className={styles.toolbarActions}>
             {mode.kind === 'local' && (
               <button
@@ -1209,19 +1293,29 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
                   <p className={styles.emptyText}>
                     {hiddenCount > 0 && !showHidden
                       ? `另有 ${hiddenCount} 个点开头的文件夹未显示`
-                      : '可直接在此目录新建文件夹，或选择上方路径'}
+                      : '可直接在此目录新建文件夹，或点击底部按钮选择当前目录'}
                   </p>
                 </div>
               )}
 
-              {visibleEntries.length > 0 && (
+              {pane.listing !== null && visibleEntries.length > 0 && filteredEntries.length === 0 && !showPaneSkeleton && pane.error === null && (
+                <div className={styles.emptyState}>
+                  <SearchIcon className={styles.emptyIcon} style={{ width: 22, height: 22 }} />
+                  <p className={styles.emptyTitle}>没有匹配的文件夹</p>
+                  <p className={styles.emptyText}>当前目录中没有名称包含「{filter.trim()}」的文件夹。</p>
+                </div>
+              )}
+
+              {filteredEntries.length > 0 && (
                 <ul className={styles.entryList} role="list">
-                  {visibleEntries.map(entry => (
+                  {filteredEntries.map((entry, index) => (
                     <li key={entry.path}>
                       <button
                         type="button"
+                        ref={element => { entryRefs.current[index] = element }}
                         className={cx(styles.entry, entry.hidden && styles.entryHidden)}
                         disabled={locked}
+                        onKeyDown={event => { onEntryKeyDown(event, index) }}
                         onClick={() => {
                           if (mode.kind === 'local') navigateLocal(entry.path)
                           else navigateRemote(mode.id, entry.path)

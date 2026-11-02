@@ -305,26 +305,28 @@
 
 .sidebarAdd {
   position: sticky;
-  bottom: 4px;
-  margin-top: 10px;
-  margin-left: auto;
+  bottom: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  gap: 6px;
+  width: 100%;
+  height: 32px;
   flex: none;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: var(--dshssh-accent);
-  color: var(--dshssh-accent-fg);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+  margin-top: 10px;
+  padding: 0 10px;
+  border: 1px solid var(--dshssh-border);
+  border-radius: 8px;
+  background: var(--dshssh-surface);
+  color: var(--dshssh-fg);
+  font-size: 12.5px;
+  font-weight: 500;
   cursor: pointer;
 }
 
-.sidebarAdd:hover {
-  filter: brightness(1.1);
+.sidebarAdd:hover:not(:disabled) {
+  background: var(--dshssh-surface-3);
+  border-color: var(--dshssh-border-strong);
 }
 
 .sidebarTitle {
@@ -487,6 +489,78 @@
   align-items: center;
   gap: 4px;
   flex: none;
+}
+
+/* ---------- directory filter ---------- */
+
+.searchBox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  width: 168px;
+  height: 25px;
+  padding: 0 6px;
+  border: 1px solid var(--dshssh-border);
+  border-radius: 6px;
+  background: var(--dshssh-surface-inset);
+  color: var(--dshssh-fg-subtle);
+}
+
+.searchBox:focus-within {
+  border-color: var(--dshssh-accent);
+  box-shadow: 0 0 0 2px var(--dshssh-accent-soft);
+}
+
+.searchIcon {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.searchInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--dshssh-fg);
+  font-size: 12px;
+}
+
+.searchInput::placeholder {
+  color: var(--dshssh-fg-subtle);
+}
+
+.searchInput:disabled {
+  opacity: 0.55;
+}
+
+.searchClear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dshssh-fg-subtle);
+  cursor: pointer;
+}
+
+.searchClear svg {
+  width: 10px;
+  height: 10px;
+}
+
+.searchClear:hover {
+  background: var(--dshssh-surface-3);
+  color: var(--dshssh-fg);
 }
 
 .toolButton {
@@ -1244,6 +1318,10 @@
 
   .toolbar {
     flex-wrap: wrap;
+  }
+
+  .searchBox {
+    width: 100%;
   }
 
   .footer {
