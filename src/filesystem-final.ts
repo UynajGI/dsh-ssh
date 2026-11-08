@@ -23,7 +23,7 @@ import type {
   FsWriteOutcome,
 } from '@deepseek-ai/dsh-fs'
 import { quoteShellArg } from './runtime.ts'
-import { parseSshTargetKey, resolveSshPath, resolveSshTargetKey, sshTargetKey } from './transport.ts'
+import { resolveSshPath, resolveSshTargetKey, sshTargetKey } from './transport.ts'
 import type { SshTransport } from './transport.ts'
 
 const BINARY_SAMPLE_BYTES = 8192
@@ -177,8 +177,8 @@ export class SshFileSystem extends FileSystem {
   }
 
   override contains(parent: FsTarget, child: FsTarget): boolean {
-    const parentRoute = parseSshTargetKey(String(parent.targetKey))
-    const childRoute = parseSshTargetKey(String(child.targetKey))
+    const parentRoute = this.routeTarget(parent)
+    const childRoute = this.routeTarget(child)
     if (parentRoute.connectionId !== childRoute.connectionId) return false
     const relative = posix.relative(parentRoute.path, childRoute.path)
     return relative === '' || (relative !== '..' && !relative.startsWith('../') && !posix.isAbsolute(relative))
@@ -313,13 +313,12 @@ export class SshFileSystem extends FileSystem {
         sftp.readdir(route.path, (error, value) => { if (error !== undefined) reject(error); else resolve(value) })
       })
       assertNotAborted(signal, 'list')
-      const targetRoute = parseSshTargetKey(String(target.targetKey))
       const entries: FsDirEntry[] = []
       for (const entry of listed) {
         const childRemotePath = posix.join(route.path, entry.filename)
         const canonical = await this.canonicalPath(childRemotePath, signal, route.transport)
-        const childKey = targetRoute.connectionId === undefined ? canonical : sshTargetKey(targetRoute.connectionId, canonical)
-        const childDisplayPath = targetRoute.connectionId === undefined ? childRemotePath : sshTargetKey(targetRoute.connectionId, childRemotePath)
+        const childKey = route.connectionId === undefined ? canonical : sshTargetKey(route.connectionId, canonical)
+        const childDisplayPath = route.connectionId === undefined ? childRemotePath : sshTargetKey(route.connectionId, childRemotePath)
         entries.push({
           name: entry.filename,
           type: entryType(entry.attrs),
