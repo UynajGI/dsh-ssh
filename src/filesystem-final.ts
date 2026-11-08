@@ -23,7 +23,7 @@ import type {
   FsWriteOutcome,
 } from '@deepseek-ai/dsh-fs'
 import { quoteShellArg } from './runtime.ts'
-import { parseSshTargetKey, resolveSshCwd, resolveSshTargetKey, sshTargetKey } from './transport.ts'
+import { parseSshTargetKey, resolveSshPath, resolveSshTargetKey, sshTargetKey } from './transport.ts'
 import type { SshTransport } from './transport.ts'
 
 const BINARY_SAMPLE_BYTES = 8192
@@ -128,9 +128,14 @@ export class SshFileSystem extends FileSystem {
 
   private readonly locks = new Map<string, Promise<unknown>>()
 
-  private routeCwd(cwd: string | undefined): { transport: SshTransport; base: string; connectionId?: string } {
-    const route = resolveSshCwd(this.ctx, cwd)
-    return { transport: route.transport, base: route.cwd, ...(route.connectionId !== undefined ? { connectionId: route.connectionId } : {}) }
+  private routePath(path: string, cwd: string | undefined): { transport: SshTransport; remotePath: string; connectionId?: string; displayPath: string } {
+    const route = resolveSshPath(this.ctx, path, cwd)
+    return {
+      transport: route.transport,
+      remotePath: route.path,
+      ...(route.connectionId !== undefined ? { connectionId: route.connectionId } : {}),
+      displayPath: route.connectionId === undefined ? route.path : sshTargetKey(route.connectionId, route.path),
+    }
   }
 
   private routeTarget(target: FsTarget): { transport: SshTransport; path: string; connectionId?: string } {
@@ -148,9 +153,9 @@ export class SshFileSystem extends FileSystem {
   override async resolve(path: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<FsTarget> {
     assertNotAborted(opts?.signal, 'resolve')
     if (path.trim().length === 0) throw new FsError('file_path must be a non-empty string', 'FS_NOT_FOUND')
-    const route = this.routeCwd(opts?.cwd)
-    const remotePath = posix.resolve(route.base, path)
-    const displayPath = route.connectionId === undefined ? remotePath : sshTargetKey(route.connectionId, remotePath)
+    const route = this.routePath(path, opts?.cwd)
+    const remotePath = route.remotePath
+    const displayPath = route.displayPath
     try {
       const canonical = await this.canonicalPath(remotePath, opts?.signal, route.transport)
       assertNotAborted(opts?.signal, 'resolve')
@@ -194,17 +199,17 @@ export class SshFileSystem extends FileSystem {
   override async lstat(path: string, opts?: { cwd?: string }, signal?: AbortSignal): Promise<FsPathInfo | undefined> {
     assertNotAborted(signal, 'lstat')
     if (path.trim().length === 0) throw new FsError('file_path must be a non-empty string', 'FS_NOT_FOUND')
-    const route = this.routeCwd(opts?.cwd)
-    const displayPath = posix.resolve(route.base, path)
+    const route = this.routePath(path, opts?.cwd)
+    const displayPath = route.displayPath
     const sftp = await route.transport.getSftp()
     try {
       const stats = await new Promise<Stats>((resolve, reject) => {
-        sftp.lstat(displayPath, (error, value) => { if (error !== undefined) reject(error); else resolve(value) })
+        sftp.lstat(route.remotePath, (error, value) => { if (error !== undefined) reject(error); else resolve(value) })
       })
       assertNotAborted(signal, 'lstat')
       const type = stats.isSymbolicLink() ? 'symlink' as const : stats.isFile() ? 'file' as const : stats.isDirectory() ? 'directory' as const : 'other' as const
       return {
-        version: entryVersion(stats, displayPath),
+        version: entryVersion(stats, route.remotePath),
         type,
         ...(stats.isFile() ? { size: stats.size } : {}),
       }
