@@ -119,6 +119,50 @@ export function resolveSshCwd(ctx: Context, cwd: string | undefined): SshCwdRout
   return { transport: ctx.ssh as unknown as SshTransport, cwd: (ctx.ssh as SshRuntime).resolveRemoteCwd(cwd) }
 }
 
+/**
+ * Resolve one path-based filesystem operation against the transport it names.
+ *
+ * An absolute path can itself be a registry placeholder: a session's project
+ * directory is `<dsh home>/dsh-ssh-routes/<id>/<remote path>`, and host
+ * services can pass that path without a `cwd` (the sandbox resolving its
+ * workspace root is the common case). An existing connection named by the
+ * path wins. A placeholder spelling that does not name a live connection is
+ * an ordinary path (for example a project-root marker probe at
+ * `<dsh home>/dsh-ssh-routes/.git`), so it falls back to the aggregate
+ * transport instead of failing the whole operation.
+ */
+export function resolveSshPath(ctx: Context, path: string, cwd: string | undefined): SshCwdRoute & { path: string } {
+  if (path.startsWith('ssh://') || posix.isAbsolute(path)) {
+    const parsed = parseSshTargetKey(path)
+    if (parsed.connectionId !== undefined) {
+      const registry = ctx.get('sshRegistry') as SshRegistry | undefined
+      const connection = registry?.get(parsed.connectionId)
+      if (connection !== undefined) {
+        const cwdRoute = cwd === undefined ? undefined : resolveSshCwd(ctx, cwd)
+        if (cwdRoute?.connectionId !== undefined && cwdRoute.connectionId !== parsed.connectionId) {
+          throw new Error(`dsh-ssh: path names connection "${parsed.connectionId}" but the working directory is routed to "${cwdRoute.connectionId}"`)
+        }
+        return { transport: connection, cwd: parsed.path, connectionId: parsed.connectionId, path: parsed.path }
+      }
+      if (path.startsWith('ssh://')) {
+        throw new Error(`dsh-ssh: path names unknown connection "${parsed.connectionId}" (is dsh-ssh/web mounted?)`)
+      }
+      // An unknown placeholder-looking path is a local route-tree path, not a
+      // cross-connection request: keep it on the aggregate transport even when
+      // the caller supplied a registry cwd.
+      return { transport: ctx.ssh as unknown as SshTransport, cwd: (ctx.ssh as SshRuntime).resolveRemoteCwd(path), path }
+    }
+  }
+  const route = resolveSshCwd(ctx, cwd)
+  const remotePath = posix.resolve(route.cwd, path)
+  return {
+    transport: route.transport,
+    cwd: remotePath,
+    ...(route.connectionId !== undefined ? { connectionId: route.connectionId } : {}),
+    path: remotePath,
+  }
+}
+
 /** Resolve an encoded filesystem target key against its owning transport. */
 export function resolveSshTargetKey(ctx: Context, targetKey: string): SshCwdRoute & { path: string } {
   const parsed = parseSshTargetKey(targetKey)
@@ -128,6 +172,14 @@ export function resolveSshTargetKey(ctx: Context, targetKey: string): SshCwdRout
   const registry = ctx.get('sshRegistry') as SshRegistry | undefined
   const connection = registry?.get(parsed.connectionId)
   if (connection === undefined) {
+    // A local path under the routes root can look like a connection id even
+    // though no such connection exists (for example a project-root marker
+    // probe at `<dsh home>/dsh-ssh-routes/.git`). Only the `ssh://` spelling
+    // is an explicit route; the placeholder spelling stays an ordinary path
+    // on the aggregate transport.
+    if (!targetKey.startsWith('ssh://')) {
+      return { transport: ctx.ssh as unknown as SshTransport, cwd: (ctx.ssh as SshRuntime).resolveRemoteCwd(targetKey), path: targetKey }
+    }
     throw new Error(`dsh-ssh: target names unknown connection "${parsed.connectionId}" (is dsh-ssh/web mounted?)`)
   }
   return { transport: connection, cwd: parsed.path, connectionId: parsed.connectionId, path: parsed.path }
