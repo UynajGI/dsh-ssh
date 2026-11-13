@@ -2,10 +2,9 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
-## <small>0.4.4 (2026-11-13)</small>
+## <small>0.4.5 (2026-11-13)</small>
 
-* fix: resolve open issue reports and track the DSH 0.2.2 prerelease ([44d2912](https://github.com/UynajGI/dsh-ssh/commit/44d2912)), closes [#6](https://github.com/UynajGI/dsh-ssh/issues/6) [8/#9](https://github.com/UynajGI/dsh-ssh/issues/9) [#11](https://github.com/UynajGI/dsh-ssh/issues/11) [#12](https://github.com/UynajGI/dsh-ssh/issues/12)
-* fix(fs): route registry placeholders by path (#10) ([542fe7f](https://github.com/UynajGI/dsh-ssh/commit/542fe7f)), closes [#10](https://github.com/UynajGI/dsh-ssh/issues/10) [#7](https://github.com/UynajGI/dsh-ssh/issues/7)
+* fix(fs): keep registry placeholders off the local path ([2664d65](https://github.com/UynajGI/dsh-ssh/commit/2664d65))
 ## 0.4.3 (2026-10-20)
 
 ### Features
