@@ -120,6 +120,10 @@ function isConnectionInput(value: unknown): value is ConnectionInput {
     if (field !== undefined && !isString(field)) return false
   }
   if (value.port !== undefined && (typeof value.port !== 'number' || !Number.isInteger(value.port))) return false
+  if (value.strictHostKeyChecking !== undefined && typeof value.strictHostKeyChecking !== 'boolean') return false
+  if (value.knownHosts !== undefined) {
+    if (!Array.isArray(value.knownHosts) || !value.knownHosts.every(isString)) return false
+  }
   if (value.jump !== undefined) {
     if (!Array.isArray(value.jump)) return false
     for (const hop of value.jump) {
@@ -309,6 +313,12 @@ export function apply(ctx: Context, config: WebChannelConfig): void {
           const input = requirePayload(payload, isConnectionInput, 'connections.test')
           const outcome = await registry().test(input)
           return outcome.ok ? { ok: true, value: { ok: true } } : wireError('connection-failed', outcome.message)
+        }
+        case 'connections.reconnect': {
+          const input = requirePayload(payload, isIdPayload, 'connections.reconnect')
+          const id = input.id.trim()
+          requireConnection(id)
+          return { ok: true, value: { reconnected: registry().reconnect(id) } }
         }
         case 'browse.home': {
           const input = requirePayload(payload, isIdPayload, 'browse.home')

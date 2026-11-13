@@ -12,21 +12,28 @@ import { posix } from 'node:path'
 import type { Readable } from 'node:stream'
 import type { SFTPWrapper, Stats } from 'ssh2'
 import { FileSystem, FsError, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
+import { applyHunks } from '@deepseek-ai/dsh-fs-patch'
+import type { PatchHunk } from '@deepseek-ai/dsh-fs-patch'
 import type {
+  FsDeleteOutcome,
   FsDirEntry,
   FsEditOutcome,
   FsEditRequest,
   FsInfo,
+  FsMoveOutcome,
   FsPathInfo,
   FsTarget,
   FsWriteIntent,
   FsWriteOutcome,
 } from '@deepseek-ai/dsh-fs'
 import { quoteShellArg } from './runtime.ts'
+import { LocalFileSystem, isLocalAbsolutePath } from './filesystem-local.ts'
 import { resolveSshPath, resolveSshTargetKey, sshTargetKey } from './transport.ts'
 import type { SshTransport } from './transport.ts'
 
 const BINARY_SAMPLE_BYTES = 8192
+/** Cap on the LF-normalized basis returned for diffs and removes. */
+const BASIS_MAX_BYTES = 256 * 1024
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
 
 function assertNotAborted(signal: AbortSignal | undefined, operation: string): void {
@@ -127,6 +134,22 @@ export class SshFileSystem extends FileSystem {
   static inject = ['ssh']
 
   private readonly locks = new Map<string, Promise<unknown>>()
+  /** Local half of the hybrid: Windows drive/UNC workspaces stay on this host. */
+  private readonly local = new LocalFileSystem()
+
+  /**
+   * Whether one caller path belongs to the local host rather than a remote.
+   * A drive-letter/UNC path is local; a relative path under a local cwd is
+   * local too. POSIX absolute paths and `ssh://` routes stay remote.
+   */
+  private isLocalPath(path: string, cwd: string | undefined): boolean {
+    if (isLocalAbsolutePath(path)) return true
+    return cwd !== undefined && isLocalAbsolutePath(cwd) && !path.startsWith('ssh://') && !posix.isAbsolute(path)
+  }
+
+  private targetIsLocal(target: FsTarget): boolean {
+    return isLocalAbsolutePath(String(target.targetKey))
+  }
 
   private routePath(path: string, cwd: string | undefined): { transport: SshTransport; remotePath: string; connectionId?: string; displayPath: string } {
     const route = resolveSshPath(this.ctx, path, cwd)
@@ -153,6 +176,7 @@ export class SshFileSystem extends FileSystem {
   override async resolve(path: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<FsTarget> {
     assertNotAborted(opts?.signal, 'resolve')
     if (path.trim().length === 0) throw new FsError('file_path must be a non-empty string', 'FS_NOT_FOUND')
+    if (this.isLocalPath(path, opts?.cwd)) return this.local.resolve(path, opts)
     const route = this.routePath(path, opts?.cwd)
     const remotePath = route.remotePath
     const displayPath = route.displayPath
@@ -167,16 +191,21 @@ export class SshFileSystem extends FileSystem {
   }
 
   override processPath(target: FsTarget): string {
+    if (this.targetIsLocal(target)) return this.local.processPath(target)
     return this.pathOf(target)
   }
 
   override fileUrl(target: FsTarget): string {
+    if (this.targetIsLocal(target)) return this.local.fileUrl(target)
     const path = this.processPath(target)
     if (!posix.isAbsolute(path)) throw new Error(`fs-ssh: expected an absolute process path: ${JSON.stringify(path)}`)
     return `file://${path.split('/').map(segment => encodeURIComponent(segment)).join('/')}`
   }
 
   override contains(parent: FsTarget, child: FsTarget): boolean {
+    if (this.targetIsLocal(parent) || this.targetIsLocal(child)) {
+      return this.targetIsLocal(parent) && this.targetIsLocal(child) && this.local.contains(parent, child)
+    }
     const parentRoute = this.routeTarget(parent)
     const childRoute = this.routeTarget(child)
     if (parentRoute.connectionId !== childRoute.connectionId) return false
@@ -186,6 +215,7 @@ export class SshFileSystem extends FileSystem {
 
   override async stat(target: FsTarget, signal?: AbortSignal): Promise<FsInfo | undefined> {
     assertNotAborted(signal, 'stat')
+    if (this.targetIsLocal(target)) return this.local.stat(target, signal)
     const route = this.routeTarget(target)
     const stats = await this.probe(route.path, target.displayPath, signal, route.transport)
     if (stats === undefined) return undefined
@@ -199,6 +229,7 @@ export class SshFileSystem extends FileSystem {
   override async lstat(path: string, opts?: { cwd?: string }, signal?: AbortSignal): Promise<FsPathInfo | undefined> {
     assertNotAborted(signal, 'lstat')
     if (path.trim().length === 0) throw new FsError('file_path must be a non-empty string', 'FS_NOT_FOUND')
+    if (this.isLocalPath(path, opts?.cwd)) return this.local.lstat(path, opts, signal)
     const route = this.routePath(path, opts?.cwd)
     const displayPath = route.displayPath
     const sftp = await route.transport.getSftp()
@@ -220,6 +251,7 @@ export class SshFileSystem extends FileSystem {
   }
 
   override async readText(target: FsTarget, signal?: AbortSignal): Promise<string> {
+    if (this.targetIsLocal(target)) return this.local.readText(target, signal)
     await this.requireRegular(target, signal)
     const bytes = await this.readBytesRaw(target, signal, Number.POSITIVE_INFINITY)
     assertNotAborted(signal, 'read')
@@ -227,6 +259,7 @@ export class SshFileSystem extends FileSystem {
   }
 
   override async readBytes(target: FsTarget, signal: AbortSignal | undefined, maxBytes: number): Promise<Uint8Array> {
+    if (this.targetIsLocal(target)) return this.local.readBytes(target, signal, maxBytes)
     const info = await this.requireRegular(target, signal)
     if (info.size !== undefined && info.size > maxBytes) {
       throw new FsError(`cannot read "${target.displayPath}": ${info.size} bytes exceeds the ${maxBytes}-byte limit`, 'FS_TOO_LARGE')
@@ -244,6 +277,7 @@ export class SshFileSystem extends FileSystem {
     if (!Number.isInteger(range.offset) || range.offset < 0 || !Number.isInteger(range.length) || range.length < 0) {
       throw new FsError(`cannot read "${target.displayPath}": range offset and length must be non-negative integers`, 'FS_IO_ERROR')
     }
+    if (this.targetIsLocal(target)) return this.local.readByteRange(target, range, signal)
     await this.requireRegular(target, signal)
     assertNotAborted(signal, 'read')
     if (range.length === 0) return new Uint8Array(0)
@@ -265,6 +299,7 @@ export class SshFileSystem extends FileSystem {
   }
 
   override async streamText(target: FsTarget, signal?: AbortSignal): Promise<AsyncIterable<string>> {
+    if (this.targetIsLocal(target)) return this.local.streamText(target, signal)
     await this.requireRegular(target, signal)
     const route = this.routeTarget(target)
     const sftp = await route.transport.getSftp()
@@ -303,6 +338,7 @@ export class SshFileSystem extends FileSystem {
   }
 
   override async listDir(target: FsTarget, signal?: AbortSignal): Promise<FsDirEntry[]> {
+    if (this.targetIsLocal(target)) return this.local.listDir(target, signal)
     const info = await this.stat(target, signal)
     if (info === undefined) throw new FsError(`cannot list "${target.displayPath}": not found`, 'FS_NOT_FOUND')
     if (info.type !== 'directory') throw new FsError(`cannot list "${target.displayPath}": not a directory`, 'FS_NOT_DIRECTORY')
@@ -339,6 +375,7 @@ export class SshFileSystem extends FileSystem {
     expected?: FsWriteIntent,
     signal?: AbortSignal,
   ): Promise<FsWriteOutcome> {
+    if (this.targetIsLocal(target)) return this.local.writeText(target, content, expected, signal)
     return this.withLock(String(target.targetKey), async () => {
       const route = this.routeTarget(target)
       const existing = await this.probe(route.path, target.displayPath, signal, route.transport)
@@ -363,6 +400,7 @@ export class SshFileSystem extends FileSystem {
     expected?: { version: ReturnType<typeof FsVersion> },
     signal?: AbortSignal,
   ): Promise<FsEditOutcome> {
+    if (this.targetIsLocal(target)) return this.local.editText(target, edit, expected, signal)
     return this.withLock(String(target.targetKey), async () => {
       const route = this.routeTarget(target)
       const existing = await this.probe(route.path, target.displayPath, signal, route.transport)
@@ -384,15 +422,160 @@ export class SshFileSystem extends FileSystem {
     })
   }
 
+  override async patchText(
+    target: FsTarget,
+    hunks: readonly PatchHunk[],
+    expected?: { version: ReturnType<typeof FsVersion> },
+    signal?: AbortSignal,
+  ): Promise<FsEditOutcome> {
+    if (this.targetIsLocal(target)) return this.local.patchText(target, hunks, expected, signal)
+    return this.withLock(String(target.targetKey), async () => {
+      const route = this.routeTarget(target)
+      const existing = await this.probe(route.path, target.displayPath, signal, route.transport)
+      if (existing === undefined || !existing.isFile()) {
+        throw new FsError(`cannot patch "${target.displayPath}": file changed since it was read`, 'FS_STALE_VERSION')
+      }
+      if (expected !== undefined && entryVersion(existing, route.path) !== expected.version) {
+        throw new FsError(`cannot patch "${target.displayPath}": file changed since it was read`, 'FS_STALE_VERSION')
+      }
+      const raw = await this.readForEdit(target, signal)
+      const before = normalizeLineEndings(raw)
+      const applied = applyHunks(before, hunks)
+      if (!applied.ok) {
+        throw new FsError(
+          `cannot patch "${target.displayPath}": hunk at line ${applied.failure.hunkLineNumber} did not match`,
+          'FS_PATCH_MISMATCH',
+        )
+      }
+      const storage = restoreLineEndings(applied.after, detectsCrlf(raw))
+      const version = await this.writeAtomic(target, storage, existing, false, signal)
+      return { version, before, after: applied.after }
+    })
+  }
+
+  override async deleteFile(
+    target: FsTarget,
+    expected?: { version: ReturnType<typeof FsVersion> },
+    signal?: AbortSignal,
+  ): Promise<FsDeleteOutcome> {
+    if (this.targetIsLocal(target)) return this.local.deleteFile(target, expected, signal)
+    return this.withLock(String(target.targetKey), async () => {
+      const route = this.routeTarget(target)
+      const existing = await this.probe(route.path, target.displayPath, signal, route.transport)
+      if (existing === undefined) {
+        throw new FsError(`cannot delete "${target.displayPath}": file changed since it was read`, 'FS_STALE_VERSION')
+      }
+      if (!existing.isFile()) {
+        throw new FsError(`cannot delete "${target.displayPath}": not a regular file`, 'FS_NOT_REGULAR_FILE')
+      }
+      if (expected !== undefined && entryVersion(existing, route.path) !== expected.version) {
+        throw new FsError(`cannot delete "${target.displayPath}": file changed since it was read`, 'FS_STALE_VERSION')
+      }
+      const before = await this.readBasis(target, signal)
+      const sftp = await route.transport.getSftp()
+      await new Promise<void>((resolvePromise, reject) => {
+        sftp.unlink(route.path, error => { if (error !== undefined) reject(error); else resolvePromise() })
+      })
+      return { before }
+    })
+  }
+
+  override async moveFile(
+    source: FsTarget,
+    destination: FsTarget,
+    options: {
+      hunks?: readonly PatchHunk[]
+      expectedSource?: { version: ReturnType<typeof FsVersion> }
+      expectedDestination?: FsWriteIntent
+    },
+    signal?: AbortSignal,
+  ): Promise<FsMoveOutcome> {
+    const sourceKey = String(source.targetKey)
+    const destinationKey = String(destination.targetKey)
+    if (sourceKey === destinationKey) {
+      throw new FsError(`cannot move "${source.displayPath}" onto itself`, 'FS_SAME_TARGET')
+    }
+    if (this.targetIsLocal(source) && this.targetIsLocal(destination)) {
+      return this.local.moveFile(source, destination, options, signal)
+    }
+    const [first, second] = sourceKey < destinationKey ? [sourceKey, destinationKey] : [destinationKey, sourceKey]
+    return this.withLocks([first, second], async () => {
+      const sourceRoute = this.routeTarget(source)
+      const existing = await this.probe(sourceRoute.path, source.displayPath, signal, sourceRoute.transport)
+      if (existing === undefined || !existing.isFile()) {
+        throw new FsError(`cannot move "${source.displayPath}": file changed since it was read`, 'FS_STALE_VERSION')
+      }
+      if (options.expectedSource !== undefined && entryVersion(existing, sourceRoute.path) !== options.expectedSource.version) {
+        throw new FsError(`cannot move "${source.displayPath}": file changed since it was read`, 'FS_STALE_VERSION')
+      }
+      const raw = await this.readForEdit(source, signal)
+      const normalized = normalizeLineEndings(raw)
+      let next = normalized
+      if (options.hunks !== undefined && options.hunks.length > 0) {
+        const applied = applyHunks(normalized, options.hunks)
+        if (!applied.ok) {
+          throw new FsError(
+            `cannot move "${source.displayPath}": hunk at line ${applied.failure.hunkLineNumber} did not match`,
+            'FS_PATCH_MISMATCH',
+          )
+        }
+        next = applied.after
+      }
+      const destinationRoute = this.routeTarget(destination)
+      const destinationExisting = await this.probe(destinationRoute.path, destination.displayPath, signal, destinationRoute.transport)
+      if (destinationExisting !== undefined && !destinationExisting.isFile()) {
+        throw new FsError(`cannot write "${destination.displayPath}": not a regular file`, 'FS_NOT_REGULAR_FILE')
+      }
+      this.checkWriteIntent(destinationExisting, options.expectedDestination, destination)
+      const destinationBefore = destinationExisting === undefined ? null : await this.readBasis(destination, signal)
+      const version = await this.writeAtomic(
+        destination,
+        restoreLineEndings(next, detectsCrlf(raw)),
+        destinationExisting,
+        options.expectedDestination?.kind === 'createIfAbsent',
+        signal,
+      )
+      const destinationOutcome: FsWriteOutcome = {
+        operation: destinationExisting === undefined ? 'create' : 'update',
+        version,
+        before: destinationBefore,
+        after: next,
+      }
+      const sourceBefore = await this.readBasis(source, signal)
+      try {
+        const sftp = await sourceRoute.transport.getSftp()
+        await new Promise<void>((resolvePromise, reject) => {
+          sftp.unlink(sourceRoute.path, error => { if (error !== undefined) reject(error); else resolvePromise() })
+        })
+        return { sourceBefore, destination: destinationOutcome, sourceDeleted: true }
+      } catch (error: unknown) {
+        const failure = mapError(error, 'delete', source.displayPath, signal)
+        return {
+          sourceBefore,
+          destination: destinationOutcome,
+          sourceDeleted: false,
+          sourceFailure: { code: failure.code, message: failure.message },
+        }
+      }
+    })
+  }
+
   private async withLock<T>(targetKey: string, operation: () => Promise<T>): Promise<T> {
-    const prior = this.locks.get(targetKey) ?? Promise.resolve()
+    return this.withLocks([targetKey], operation)
+  }
+
+  private async withLocks<T>(targetKeys: string[], operation: () => Promise<T>): Promise<T> {
+    const keys = [...new Set(targetKeys)].sort()
+    const prior = Promise.all(keys.map(key => this.locks.get(key) ?? Promise.resolve()))
     const run = prior.then(operation, operation)
     const tail = run.then(() => undefined, () => undefined)
-    this.locks.set(targetKey, tail)
+    for (const key of keys) this.locks.set(key, tail)
     try {
       return await run
     } finally {
-      if (this.locks.get(targetKey) === tail) this.locks.delete(targetKey)
+      for (const key of keys) {
+        if (this.locks.get(key) === tail) this.locks.delete(key)
+      }
     }
   }
 
@@ -461,6 +644,16 @@ export class SshFileSystem extends FileSystem {
       return normalizeLineEndings(decodeText(await this.readBytesRaw(target, signal, Number.POSITIVE_INFINITY), target.displayPath))
     } catch (error: unknown) {
       if (error instanceof FsError && error.code === 'FS_NOT_TEXT') return null
+      throw mapError(error, 'read', target.displayPath, signal)
+    }
+  }
+
+  private async readBasis(target: FsTarget, signal?: AbortSignal): Promise<string | null> {
+    try {
+      const bytes = await this.readBytesRaw(target, signal, BASIS_MAX_BYTES)
+      return normalizeLineEndings(decodeText(bytes, target.displayPath))
+    } catch (error: unknown) {
+      if (error instanceof FsError && (error.code === 'FS_NOT_TEXT' || error.code === 'FS_TOO_LARGE')) return null
       throw mapError(error, 'read', target.displayPath, signal)
     }
   }

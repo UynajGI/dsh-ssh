@@ -3,9 +3,7 @@
  * @module dsh-ssh/invariant
  */
 
-/* jscpd:ignore-start */
 import type { Context } from '@deepseek-ai/cordis'
-import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 
 const PACKAGE_NAME = 'dsh-ssh'
 
@@ -15,11 +13,21 @@ export const name = 'dsh-ssh-invariant'
 export const inject = ['invariants']
 
 /**
+ * The slice of the host invariant service this companion uses. Declared
+ * structurally so the package does not need a hard dependency on
+ * `@deepseek-ai/dsh-invariants`, whose peer range still pins the previous
+ * cordis major.
+ */
+interface InvariantService {
+  register(packageName: string, install: () => void): () => void
+}
+
+/**
  * No runtime invariant: connection, process, and terminal teardown have one
  * ready promise each and no independent event or mutable-data relationship to
  * cross-check.
  */
-const install: InvariantInstaller = () => {}
+const install = (): void => {}
 
 /**
  * Register this package's invariant companion.
@@ -27,5 +35,4 @@ const install: InvariantInstaller = () => {}
  * @returns the installed registration's disposer after setup succeeds.
  */
 export const apply = (ctx: Context): Promise<() => void> =>
-  Promise.resolve(ctx.invariants.register(PACKAGE_NAME, install))
-/* jscpd:ignore-end */
+  Promise.resolve((ctx as unknown as { invariants: InvariantService }).invariants.register(PACKAGE_NAME, install))

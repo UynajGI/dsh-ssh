@@ -89,18 +89,18 @@
   ],
   "engines": {
     "node": ">=22.0.0",
-    "dsh": ">=0.2.0-rc.2"
+    "dsh": ">=0.2.2-rc.3"
   },
   "dependencies": {
-    "@deepseek-ai/cordis": "^4.0.5",
-    "@deepseek-ai/dsh-fs": "^0.2.1-rc.2",
-    "@deepseek-ai/dsh-host-directory-picker": "^0.2.1-rc.2",
-    "@deepseek-ai/dsh-host-directory-picker-native": "^0.2.1-rc.2",
-    "@deepseek-ai/dsh-invariants": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-subprocess": "^0.2.1-rc.2",
-    "@deepseek-ai/dsh-timeout": "^0.2.1-rc.2",
-    "@deepseek-ai/schemastery": "^3.18.5",
-    "ssh2": "^1.16.0"
+    "@deepseek-ai/cordis": "^4.1.0",
+    "@deepseek-ai/dsh-fs": "^0.2.2-rc.3",
+    "@deepseek-ai/dsh-fs-patch": "^0.2.2-rc.3",
+    "@deepseek-ai/dsh-host-directory-picker": "^0.2.2-rc.3",
+    "@deepseek-ai/dsh-host-directory-picker-native": "^0.2.2-rc.3",
+    "@deepseek-ai/dsh-subprocess": "^0.2.2-rc.3",
+    "@deepseek-ai/dsh-timeout": "^0.2.2-rc.3",
+    "@deepseek-ai/schemastery": "^3.19.0",
+    "ssh2": "^1.17.0"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.0.0",

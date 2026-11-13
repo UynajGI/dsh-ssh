@@ -1144,6 +1144,27 @@
   color: var(--dshssh-fg-subtle);
 }
 
+.checkRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--dshssh-fg);
+  cursor: pointer;
+}
+
+.checkRow input {
+  accent-color: var(--dshssh-accent);
+}
+
+.textArea {
+  min-height: 66px;
+  resize: vertical;
+  font-family: var(--dshssh-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 /* ---------- auth segment (radio group) ---------- */
 
 .segment {

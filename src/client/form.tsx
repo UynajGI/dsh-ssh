@@ -45,6 +45,8 @@ export interface ConnectionInputWire {
   agent?: string
   jump?: JumpInput[]
   cwd?: string
+  strictHostKeyChecking?: boolean
+  knownHosts?: string[]
 }
 
 /** The Host's `~/.ssh/config` resolution result. */
@@ -158,6 +160,8 @@ export function ConnectionForm({ resolve, test, save, draft, locked, onClose, on
   const [passphrase, setPassphrase] = useState('')
   const [jumpText, setJumpText] = useState(draft?.jumpText ?? '')
   const [cwd, setCwd] = useState(draft?.cwd ?? '')
+  const [strictHostKey, setStrictHostKey] = useState(false)
+  const [knownHostsText, setKnownHostsText] = useState('')
   const [busy, setBusy] = useState(false)
   const [busyTask, setBusyTask] = useState<'resolve' | 'test' | 'save' | null>(null)
   const [feedback, setFeedback] = useState<Feedback | null>(null)
@@ -206,6 +210,11 @@ export function ConnectionForm({ resolve, test, save, draft, locked, onClose, on
     if (authKind === 'password' && password !== '') input.password = password
     if (authKind === 'key' && privateKeyPath.trim() !== '') input.privateKeyPath = privateKeyPath.trim()
     if (authKind === 'key' && passphrase !== '') input.passphrase = passphrase
+    if (strictHostKey) {
+      input.strictHostKeyChecking = true
+      const knownHosts = knownHostsText.split(/\r?\n/).map(line => line.trim()).filter(line => line !== '')
+      if (knownHosts.length > 0) input.knownHosts = knownHosts
+    }
     return input
   }
 
@@ -504,6 +513,32 @@ export function ConnectionForm({ resolve, test, save, draft, locked, onClose, on
             />
             <span className={styles.fieldHint}>支持 ~/.ssh/config 别名；格式 user@host:port，按连接顺序排列</span>
           </label>
+
+          <div className={styles.fieldGroup}>
+            <label className={styles.checkRow}>
+              <input
+                type="checkbox"
+                checked={strictHostKey}
+                disabled={busy}
+                onChange={event => { setStrictHostKey(event.target.checked) }}
+              />
+              <span>校验主机密钥（推荐）</span>
+            </label>
+            <span className={styles.fieldHint}>关闭时接受任意主机密钥；开启后只信任下方列出的密钥，整条跳板链一并校验</span>
+            {strictHostKey && (
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>受信任的主机密钥</span>
+                <textarea
+                  className={cx(styles.input, styles.textArea)}
+                  value={knownHostsText}
+                  placeholder={'SHA256:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n或 known_hosts 行：host ssh-ed25519 AAAA…'}
+                  disabled={busy}
+                  onChange={event => { setKnownHostsText(event.target.value) }}
+                />
+                <span className={styles.fieldHint}>每行一个：SHA256 指纹、裸 base64 公钥，或整行 known_hosts 条目；留空则拒绝所有主机</span>
+              </label>
+            )}
+          </div>
         </div>
 
         {feedback !== null && (

@@ -292,7 +292,7 @@ export class SshRuntime extends Service {
     })).default([]),
     cwd: z.string().required(),
     readyTimeout: z.number().default(45_000),
-    keepaliveInterval: z.number().default(0),
+    keepaliveInterval: z.number().default(30_000),
     keepaliveCountMax: z.number().default(3),
     strictHostKeyChecking: z.boolean().default(false),
     knownHosts: z.array(z.string()).default([]),
@@ -312,6 +312,7 @@ export class SshRuntime extends Service {
   private sftpOpening: Promise<SFTPWrapper> | undefined
   private remoteEnvironment: Promise<Record<string, string>> | undefined
   private disposed = false
+  private transportClosed = false
 
   /** Validate config, resolve the jump chain, and bind the disposal policy. */
   constructor(ctx: Context, config: Config) {
@@ -354,10 +355,40 @@ export class SshRuntime extends Service {
    */
   async getClient(): Promise<Client> {
     if (this.disposed) throw new Error('SSH service is disposing')
+    if (this.transportClosed) this.reconnect()
     this.ready ??= this.open()
-    const client = await this.ready
+    let client: Client
+    try {
+      client = await this.ready
+    } catch (error) {
+      // A failed handshake must not poison the shared transport forever.
+      this.ready = undefined
+      this.sftp = undefined
+      this.sftpOpening = undefined
+      this.remoteEnvironment = undefined
+      throw error
+    }
     if (this.disposed) throw new Error('SSH service is disposing')
     return client
+  }
+
+  /** Drop the cached chain so the next operation opens a fresh one. */
+  reconnect(): void {
+    if (this.disposed) return
+    this.transportClosed = false
+    this.ready = undefined
+    this.sftp = undefined
+    this.sftpOpening = undefined
+    this.remoteEnvironment = undefined
+    const clients = this.clients
+    this.clients = []
+    for (const client of clients.reverse()) {
+      try {
+        client.end()
+      } catch (_alreadyEnded) {
+        // Best-effort teardown; the next open replaces the chain anyway.
+      }
+    }
   }
 
   /**
@@ -506,6 +537,18 @@ export class SshRuntime extends Service {
         const previous = clients[index - 1]
         const client = new Client()
         clients.push(client)
+        // Invalidate the cached chain on close or reset, and keep a persistent
+        // error listener so a post-ready RST cannot become an unhandled event.
+        const forget = (): void => {
+          if (!this.clients.includes(client)) return
+          this.transportClosed = true
+          this.ready = undefined
+          this.sftp = undefined
+          this.sftpOpening = undefined
+          this.remoteEnvironment = undefined
+        }
+        client.once('close', forget)
+        client.on('error', forget)
         const config = toConnectConfig(host, this.config.strictHostKeyChecking, this.config.knownHosts)
         if (previous === undefined) {
           await connectReady(client, config)

@@ -61,6 +61,10 @@ export interface SshConnectionSpec {
   keepaliveInterval?: number
   /** TCP keepalive retry budget before the connection is considered dead. */
   keepaliveCountMax?: number
+  /** Reject host keys that do not match {@link knownHosts}; defaults to false. */
+  strictHostKeyChecking?: boolean
+  /** Trusted host keys as `SHA256:<base64>` fingerprints or raw base64 keys. */
+  knownHosts?: string[]
 }
 
 /** Read an identity value that is a local path to a PEM file (`~` expanded). */
@@ -155,6 +159,17 @@ export class SshConnection {
   private sftpOpening: Promise<SFTPWrapper> | undefined
   private remoteEnvironment: Promise<Record<string, string>> | undefined
   private disposed = false
+  private transportClosed = false
+
+  /** Whether {@link dispose} already released the chain. */
+  get isDisposed(): boolean {
+    return this.disposed
+  }
+
+  /** Whether the cached transport died and the next use must reopen the chain. */
+  get closed(): boolean {
+    return this.transportClosed
+  }
 
   /** The transport's default remote working directory. */
   get cwd(): string {
@@ -166,12 +181,14 @@ export class SshConnection {
     this.id = spec.id
     this.label = spec.label
     this.endpoint = `${spec.username}@${spec.host}`
-    this.strict = false
-    this.knownHosts = []
+    this.strict = spec.strictHostKeyChecking ?? false
+    this.knownHosts = [...(spec.knownHosts ?? [])]
     // Tailscale/DERP-relayed paths routinely exceed 20s to ready (observed
     // 4–20s variance); OpenSSH has no client-side handshake cap at all.
     const readyTimeout = spec.readyTimeout ?? 45_000
-    const keepaliveInterval = spec.keepaliveInterval ?? 0
+    // A silent peer must be noticed before the next write; OpenSSH probes
+    // every 60s by default, so 30s keeps the window short without extra noise.
+    const keepaliveInterval = spec.keepaliveInterval ?? 30_000
     const keepaliveCountMax = spec.keepaliveCountMax ?? 3
     const parent: ResolvedHop = {
       host: spec.host,
@@ -211,6 +228,21 @@ export class SshConnection {
       this.sftp = undefined
       try { sftp.end() } catch { /* already quiescent */ }
     }
+    this.endClients()
+  }
+
+  /** Drop the cached chain so the next operation opens a fresh one. */
+  reconnect(): void {
+    if (this.disposed) return
+    this.transportClosed = false
+    this.ready = undefined
+    this.sftp = undefined
+    this.sftpOpening = undefined
+    this.remoteEnvironment = undefined
+    this.endClients()
+  }
+
+  private endClients(): void {
     const clients = this.clients
     this.clients = []
     for (const client of clients.reverse()) {
@@ -239,11 +271,17 @@ export class SshConnection {
   async getClient(signal?: AbortSignal): Promise<Client> {
     signal?.throwIfAborted()
     if (this.disposed) throw new Error(`dsh-ssh: connection "${this.label}" is disposed`)
+    if (this.transportClosed) this.reconnect()
     this.ready ??= this.open()
     let client: Client
     try {
       client = await this.ready
     } catch (error) {
+      // A failed handshake must not poison the entry forever.
+      this.ready = undefined
+      this.sftp = undefined
+      this.sftpOpening = undefined
+      this.remoteEnvironment = undefined
       throw rewrapConnectError(error, this.label, this.endpoint)
     }
     signal?.throwIfAborted()
@@ -344,6 +382,19 @@ export class SshConnection {
         const previous = clients[index - 1]
         const client = new Client()
         clients.push(client)
+        // A dead chain must invalidate the cache instead of failing every later
+        // operation with "Not connected"; the persistent error listener also
+        // turns a post-ready RST into a recovery instead of an unhandled event.
+        const forget = (): void => {
+          if (!this.clients.includes(client)) return
+          this.transportClosed = true
+          this.ready = undefined
+          this.sftp = undefined
+          this.sftpOpening = undefined
+          this.remoteEnvironment = undefined
+        }
+        client.once('close', forget)
+        client.on('error', forget)
         const config = toConnectConfig(hop, undefined)
         if (this.strict) config.hostVerifier = hostVerifierFor(this.knownHosts)
         if (previous === undefined) {

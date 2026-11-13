@@ -26,7 +26,8 @@ interface SshConfigBlock {
   user?: string
   port?: number
   identityFiles: string[]
-  proxyJump: string[]
+  /** Absent when the block sets no ProxyJump; an empty list means `none`. */
+  proxyJump?: string[]
 }
 
 /** Client-facing view of one registered connection (no secrets). */
@@ -86,6 +87,10 @@ export interface ConnectionInput {
   agent?: string
   jump?: ResolvedJump[]
   cwd?: string
+  /** Reject host keys that do not match `knownHosts`. */
+  strictHostKeyChecking?: boolean
+  /** Trusted host keys as `SHA256:<base64>` fingerprints or raw base64 keys. */
+  knownHosts?: string[]
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -149,7 +154,7 @@ function readSshConfig(path: string): Array<{ patterns: string[]; block: SshConf
       const key = keyword.toLowerCase()
       if (key === 'host') {
         push()
-        current = { patterns: value.split(/\s+/), block: { identityFiles: [], proxyJump: [] } }
+        current = { patterns: value.split(/\s+/), block: { identityFiles: [] } }
         continue
       }
       if (current === undefined) continue
@@ -240,11 +245,28 @@ export class SshRegistry extends Service {
     const spec = this.specs.get(id)
     if (spec === undefined) return undefined
     let connection = this.live.get(id)
+    if (connection !== undefined && (connection.isDisposed || connection.closed)) {
+      this.live.delete(id)
+      connection.dispose()
+      connection = undefined
+    }
     if (connection === undefined) {
       connection = new SshConnection(spec)
       this.live.set(id, connection)
     }
     return connection
+  }
+
+  /**
+   * Replace a live entry's SSH chain with a fresh one. Workspace routes keep
+   * the same connection id, so this is the recovery path a dead link needs.
+   */
+  reconnect(id: string): boolean {
+    if (!this.specs.has(id)) return false
+    const connection = this.live.get(id)
+    if (connection === undefined) return false
+    connection.reconnect()
+    return true
   }
 
   /** Resolve a `ssh://<id>/<path>` cwd/path into its live connection and remote path. */
@@ -291,6 +313,8 @@ export class SshRegistry extends Service {
     if (input.privateKeyPath !== undefined && input.privateKeyPath !== '') spec.privateKeyPath = input.privateKeyPath
     if (input.passphrase !== undefined && input.passphrase !== '') spec.passphrase = input.passphrase
     if (input.agent !== undefined && input.agent !== '') spec.agent = input.agent
+    if (input.strictHostKeyChecking === true) spec.strictHostKeyChecking = true
+    if (input.knownHosts !== undefined && input.knownHosts.length > 0) spec.knownHosts = [...input.knownHosts]
     this.specs.set(id, spec)
     void this.persist()
     return { id, view: this.viewOf(spec) }
@@ -331,6 +355,8 @@ export class SshRegistry extends Service {
     if (input.privateKeyPath !== undefined && input.privateKeyPath !== '') spec.privateKeyPath = input.privateKeyPath
     if (input.passphrase !== undefined && input.passphrase !== '') spec.passphrase = input.passphrase
     if (input.agent !== undefined && input.agent !== '') spec.agent = input.agent
+    if (input.strictHostKeyChecking === true) spec.strictHostKeyChecking = true
+    if (input.knownHosts !== undefined && input.knownHosts.length > 0) spec.knownHosts = [...input.knownHosts]
     const connection = new SshConnection(spec)
     try {
       await connection.getClient()
@@ -386,16 +412,31 @@ export class SshRegistry extends Service {
 
   /** Resolve against one fixed snapshot of the config (jump hops share it). */
   private resolveAgainst(entries: Array<{ patterns: string[]; block: SshConfigBlock }>, host: string, depth: number): ResolvedSshConfig {
-    const block = entries.find(entry => entry.patterns.some(pattern => patternMatches(pattern, host)))?.block
+    // OpenSSH merges every matching Host block and takes the first obtained
+    // value per keyword, in file order; IdentityFile accumulates because each
+    // listed identity is tried in turn.
+    const matched = entries.filter(entry => entry.patterns.some(pattern => patternMatches(pattern, host)))
+    let hostName: string | undefined
+    let user: string | undefined
+    let port: number | undefined
+    let proxyJump: string[] | undefined
+    const identityFiles: string[] = []
+    for (const entry of matched) {
+      hostName ??= entry.block.hostName
+      user ??= entry.block.user
+      port ??= entry.block.port
+      proxyJump ??= entry.block.proxyJump
+      identityFiles.push(...entry.block.identityFiles)
+    }
     const resolved: ResolvedSshConfig = {
-      host: block?.hostName ?? host,
-      username: block?.user ?? '',
-      port: block?.port ?? 22,
-      privateKeyPaths: block?.identityFiles ?? [],
+      host: hostName ?? host,
+      username: user ?? '',
+      port: port ?? 22,
+      privateKeyPaths: identityFiles,
       jump: [],
     }
     if (depth < 8) {
-      for (const entry of block?.proxyJump ?? []) {
+      for (const entry of proxyJump ?? []) {
         const hop = parseJumpEntry(entry)
         const hopConfig = this.resolveAgainst(entries, hop.host, depth + 1)
         resolved.jump.push({

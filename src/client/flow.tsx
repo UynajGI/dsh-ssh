@@ -331,6 +331,7 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
   const [nativePicking, setNativePicking] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<ConnectionView | null>(null)
   const [removingId, setRemovingId] = useState<string | null>(null)
+  const [reconnectingId, setReconnectingId] = useState<string | null>(null)
   const [slow, setSlow] = useState(false)
 
   const generation = useRef(0)
@@ -719,6 +720,25 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
     }
   }
 
+  const reconnectConnection = async (connection: ConnectionView): Promise<void> => {
+    if (reconnectingId !== null) return
+    setReconnectingId(connection.id)
+    try {
+      unwrap(await rpc('connections.reconnect', { id: connection.id }), 'connections.reconnect failed')
+      if (mode.kind === 'remote' && mode.id === connection.id) refreshCurrent()
+    } catch (error) {
+      const message = errorText(error)
+      if (isTransportError(message)) {
+        connectionUi.markTransportFailure()
+        setConnectionsError('连接中断，恢复后会自动重试')
+      } else {
+        setConnectionsError(message)
+      }
+    } finally {
+      setReconnectingId(null)
+    }
+  }
+
   const formResolve = async (host: string): Promise<ResolvedSshConfigView> => {
     try {
       return unwrap(await rpc('connections.resolve', { host }), 'connections.resolve failed')
@@ -979,6 +999,16 @@ export function SshWorkspaceFlow(props: FlowProps & FlowInjected) {
                               )}
                             </span>
                           </span>
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.connectionRemove}
+                          aria-label={`重新连接 ${connection.label}`}
+                          title="重新连接（重建 SSH 链路）"
+                          disabled={locked || reconnectingId !== null}
+                          onClick={() => { void reconnectConnection(connection) }}
+                        >
+                          <RefreshIcon style={{ width: 14, height: 14 }} className={reconnectingId === connection.id ? styles.spin : undefined} />
                         </button>
                         <button
                           type="button"

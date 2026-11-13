@@ -45,15 +45,15 @@ Only needed when composing providers by hand (`cordis.yml`):
 | `port` | 22 | |
 | `password` `privateKey` `passphrase` `agent` | — | any auth mode; falls back to `~/.ssh` identities |
 | `jump` | `[]` | ProxyJump chain, independent auth per hop |
-| `readyTimeout` `keepaliveInterval` `keepaliveCountMax` | 45000 / 0 / 3 | milliseconds |
-| `strictHostKeyChecking` `knownHosts` | false / `[]` | host-key verification |
+| `readyTimeout` `keepaliveInterval` `keepaliveCountMax` | 45000 / 30000 / 3 | milliseconds |
+| `strictHostKeyChecking` `knownHosts` | false / `[]` | host-key verification (fingerprints, raw base64 keys, or `known_hosts` lines) |
 
 > **Web profile:** `subprocess` and `fs` are single-slot services. Disable the local providers (`dsh-subprocess-local`, `dsh-fs-sandbox`) in the profile patch, or remote work silently runs on the harness host.
 
 ## Limitations
 
 - Remote pid is always `-1`; `terminate` doesn't reap descendants (SSH can't).
-- The SSH link doesn't auto-reconnect after a drop — recreate the connection.
+- A dropped SSH chain is reopened on the next operation, and the sidebar's ↻ action rebuilds it explicitly; in-flight work at the moment of the drop still fails.
 - `streamText` is text-only; remote sessions aren't added to the local workspace registry.
 
 ## Development

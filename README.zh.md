@@ -45,15 +45,15 @@ dsh plugin --profile web add dsh-ssh
 | `port` | 22 | |
 | `password` `privateKey` `passphrase` `agent` | — | 任意认证方式；未配置时回退 `~/.ssh` 默认私钥 |
 | `jump` | `[]` | 跳板链，每级独立认证 |
-| `readyTimeout` `keepaliveInterval` `keepaliveCountMax` | 45000 / 0 / 3 | 毫秒 |
-| `strictHostKeyChecking` `knownHosts` | false / `[]` | 主机指纹校验 |
+| `readyTimeout` `keepaliveInterval` `keepaliveCountMax` | 45000 / 30000 / 3 | 毫秒 |
+| `strictHostKeyChecking` `knownHosts` | false / `[]` | 主机指纹校验（支持 SHA256 指纹、裸 base64 公钥或整行 known_hosts） |
 
 > **Web profile：** `subprocess` 与 `fs` 是单槽位服务。请在 profile 补丁里禁用本机 provider（`dsh-subprocess-local`、`dsh-fs-sandbox`），否则远程操作会悄悄落在 harness 宿主机上。
 
 ## 已知限制
 
 - 远端 pid 恒为 `-1`；`terminate` 不保证回收子进程（SSH 协议所限）。
-- SSH 连接断开后不会自动重连——需重建连接。
+- SSH 链路断开后会在下一次操作时自动重开，侧栏的 ↻ 可显式重建；断开瞬间正在执行的操作仍会失败。
 - `streamText` 仅文本；远程会话不会写入本地 workspace 注册表。
 
 ## 开发
