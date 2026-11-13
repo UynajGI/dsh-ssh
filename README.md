@@ -54,6 +54,7 @@ Only needed when composing providers by hand (`cordis.yml`):
 
 - Remote pid is always `-1`; `terminate` doesn't reap descendants (SSH can't).
 - A dropped SSH chain is reopened on the next operation, and the sidebar's ↻ action rebuilds it explicitly; in-flight work at the moment of the drop still fails.
+- On a Windows host, drive-letter/UNC paths are served by the local filesystem (registry placeholders excepted), while subprocess and terminal execution still use the SSH transport.
 - `streamText` is text-only; remote sessions aren't added to the local workspace registry.
 
 ## Development

@@ -28,7 +28,7 @@ import type {
 } from '@deepseek-ai/dsh-fs'
 import { quoteShellArg } from './runtime.ts'
 import { LocalFileSystem, isLocalAbsolutePath } from './filesystem-local.ts'
-import { resolveSshPath, resolveSshTargetKey, sshTargetKey } from './transport.ts'
+import { isSshRoutePlaceholder, resolveSshPath, resolveSshTargetKey, sshTargetKey } from './transport.ts'
 import type { SshTransport } from './transport.ts'
 
 const BINARY_SAMPLE_BYTES = 8192
@@ -139,16 +139,21 @@ export class SshFileSystem extends FileSystem {
 
   /**
    * Whether one caller path belongs to the local host rather than a remote.
-   * A drive-letter/UNC path is local; a relative path under a local cwd is
-   * local too. POSIX absolute paths and `ssh://` routes stay remote.
+   * A drive-letter/UNC path is local unless it sits in the registry placeholder
+   * tree (which is drive-letter-shaped on Windows); a relative path under a
+   * local cwd is local too. POSIX absolute paths and `ssh://` routes stay
+   * remote.
    */
   private isLocalPath(path: string, cwd: string | undefined): boolean {
-    if (isLocalAbsolutePath(path)) return true
-    return cwd !== undefined && isLocalAbsolutePath(cwd) && !path.startsWith('ssh://') && !posix.isAbsolute(path)
+    if (path.startsWith('ssh://')) return false
+    if (isLocalAbsolutePath(path)) return !isSshRoutePlaceholder(path)
+    if (cwd === undefined || !isLocalAbsolutePath(cwd) || isSshRoutePlaceholder(cwd)) return false
+    return !posix.isAbsolute(path)
   }
 
   private targetIsLocal(target: FsTarget): boolean {
-    return isLocalAbsolutePath(String(target.targetKey))
+    const key = String(target.targetKey)
+    return isLocalAbsolutePath(key) && !isSshRoutePlaceholder(key)
   }
 
   private routePath(path: string, cwd: string | undefined): { transport: SshTransport; remotePath: string; connectionId?: string; displayPath: string } {

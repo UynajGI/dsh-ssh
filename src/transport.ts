@@ -69,6 +69,15 @@ export function sshRoutesRoot(): string {
   return resolve(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'dsh-ssh-routes')
 }
 
+/**
+ * Whether one path sits under the local placeholder tree. On Windows the tree
+ * is drive-letter-shaped, so the local-filesystem fallback must exclude it
+ * before treating a drive path as a local workspace.
+ */
+export function isSshRoutePlaceholder(value: string): boolean {
+  return routeFromPlaceholder(value) !== null
+}
+
 /** The local placeholder path of one registry route (created by `session.route`). */
 export function sshRoutePlaceholder(connectionId: string, remotePath: string): string {
   if (!/^[A-Za-z0-9._-]+$/.test(connectionId)) {
@@ -132,7 +141,7 @@ export function resolveSshCwd(ctx: Context, cwd: string | undefined): SshCwdRout
  * transport instead of failing the whole operation.
  */
 export function resolveSshPath(ctx: Context, path: string, cwd: string | undefined): SshCwdRoute & { path: string } {
-  if (path.startsWith('ssh://') || posix.isAbsolute(path)) {
+  if (path.startsWith('ssh://') || posix.isAbsolute(path) || isSshRoutePlaceholder(path)) {
     const parsed = parseSshTargetKey(path)
     if (parsed.connectionId !== undefined) {
       const registry = ctx.get('sshRegistry') as SshRegistry | undefined

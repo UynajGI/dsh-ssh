@@ -54,6 +54,7 @@ dsh plugin --profile web add dsh-ssh
 
 - 远端 pid 恒为 `-1`；`terminate` 不保证回收子进程（SSH 协议所限）。
 - SSH 链路断开后会在下一次操作时自动重开，侧栏的 ↻ 可显式重建；断开瞬间正在执行的操作仍会失败。
+- Windows 宿主上盘符/UNC 路径由本地文件系统处理（registry 占位路径除外），但 subprocess 与终端仍走 SSH 传输。
 - `streamText` 仅文本；远程会话不会写入本地 workspace 注册表。
 
 ## 开发
